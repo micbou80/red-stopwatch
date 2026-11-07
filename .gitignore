@@ -1,0 +1,8 @@
+.pio/
+__pycache__/
+.venv/
+.env
+.env.*
+!.env.example
+*.key
+stopwatch-backup.bin

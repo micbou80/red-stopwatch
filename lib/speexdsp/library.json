@@ -1,0 +1,19 @@
+{
+  "name": "SpeexDSP Echo",
+  "version": "1.2.1",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xiph/speexdsp.git"
+  },
+  "build": {
+    "flags": [
+      "-DFLOATING_POINT",
+      "-DUSE_SMALLFT",
+      "-DEXPORT=",
+      "-DOS_SUPPORT_CUSTOM",
+      "-DDISABLE_WARNINGS",
+      "-DDISABLE_NOTIFICATIONS"
+    ]
+  }
+}
