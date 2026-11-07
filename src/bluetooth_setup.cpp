@@ -143,6 +143,7 @@ void open() {
 }
 
 bool active() { return page != Page::closed; }
+void redraw() { draw(); }
 
 bool update(bool retry, bool back) {
     if (back) {

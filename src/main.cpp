@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.2.0";
+constexpr char firmwareVersion[] = "FW 0.2.1";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -58,8 +58,17 @@ constexpr int dragLineHeight = 24;
 enum class Mood { idle, listening, thinking, answer, error };
 enum class Screen { home, transcript, answer, timer };
 enum SettingsOption {
-    settingsWifi, settingsBluetooth, settingsVolume, settingsHandsFree, settingsInterrupt, settingsBack, settingsCount
+    settingsWifi, settingsBluetooth, settingsVolume, settingsDisplay, settingsHandsFree,
+    settingsInterrupt, settingsBack, settingsCount
 };
+struct DisplayTimeout {
+    const char* label;
+    unsigned long durationMs;
+};
+constexpr DisplayTimeout displayTimeouts[] = {
+    {"30 seconds", 30000}, {"1 minute", 60000}, {"5 minutes", 300000}, {"Never", 0}
+};
+constexpr uint8_t displayTimeoutCount = sizeof(displayTimeouts) / sizeof(displayTimeouts[0]);
 Mood mood = Mood::idle;
 Screen screen = Screen::home;
 M5Canvas flower(&M5.Display);
@@ -141,6 +150,9 @@ unsigned long lastClickAt = 0;
 bool settingsOpen = false;
 int settingsItem = 0;
 uint8_t speakerVolume = 100;
+uint8_t displayTimeoutIndex = 0;
+unsigned long displayActivityAt = 0;
+bool displaySleeping = false;
 bool menuButtonReady = false;
 int batteryPercent = -1;
 bool batteryCharging = false;
@@ -150,6 +162,7 @@ redTimer::Snapshot displayedTimer{redTimer::State::idle, 0};
 bool timerChimePending = false;
 
 void drawStatus();
+void wakeDisplay();
 
 void enterScreen(Screen next) {
     if (screen == next) return;
@@ -267,6 +280,7 @@ void normalizeCaption(String& caption) {
 }
 
 void showReply(String message, bool streaming = false, bool continuing = false) {
+    wakeDisplay();
     mood = Mood::answer;
     const bool sameAnswer = continuing && screen == Screen::answer;
     const bool follow = sameAnswer && replyStreaming && !scrollTouch && firstReplyLine == maxReplyScroll();
@@ -327,6 +341,7 @@ void show(Mood state, const String& message) {
         showReply(message);
         return;
     }
+    if (state != Mood::idle) wakeDisplay();
     mood = state;
     if (mood == Mood::thinking) thinkingSince = millis();
     replyLines.clear();
@@ -427,6 +442,7 @@ void showTimer() {
 }
 
 void drawStatus() {
+    if (displaySleeping) return;
     auto& display = M5.Display;
     const int x = center - 61;
     constexpr int y = 52;
@@ -515,6 +531,7 @@ void updateAvatarBounce(unsigned long now) {
 }
 
 void drawHome(const String& prompt) {
+    if (displaySleeping) return;
     auto& display = M5.Display;
     display.fillScreen(TFT_BLACK);
     drawStatus();
@@ -660,12 +677,13 @@ void stopSpeaker() {
 
 void serviceTimer() {
     const auto timer = redTimer::snapshot();
-    if (screen == Screen::timer && !settingsOpen && !wifiPicker::active() &&
+    if (!displaySleeping && screen == Screen::timer && !settingsOpen && !wifiPicker::active() &&
         (timer.state != displayedTimer.state || timer.seconds != displayedTimer.seconds)) {
         drawTimer(timer);
     }
     if (timer.state != redTimer::State::finished) timerChimePending = false;
     if (redTimer::takeAlarm()) {
+        wakeDisplay();
         timerChimePending = true;
         // Stop the motor on its own task so a Wi-Fi scan cannot extend the pulse.
         if (xTaskCreate([](void*) {
@@ -1000,6 +1018,7 @@ void updateMic() {
 }
 
 void startRecording(bool handsFree = false) {
+    wakeDisplay();
     if (!capture || !playback) {
         show(Mood::error, "Audio memory unavailable");
         return;
@@ -1128,20 +1147,58 @@ void drawSettings() {
     display.setTextSize(1);
     display.setFont(uiFont::title());
     const String items[] = {"Wi-Fi networks", "Bluetooth setup", "Volume " + String(speakerVolume) + "%",
+                            String("Display: ") + displayTimeouts[displayTimeoutIndex].label,
                             hotMic ? "Hands-free on" : "Hands-free off",
                             voiceInterruptBeta ? "Voice interrupt beta on" : "Voice interrupt beta off", "Back"};
     for (int item = 0; item < settingsCount; ++item) {
-        const int y = 88 + item * 36;
-        if (item == settingsItem) display.fillRoundRect(center - 150, y - 4, 300, 35, 8, TFT_DARKCYAN);
+        const int y = 85 + item * 33;
+        if (item == settingsItem) display.fillRoundRect(center - 150, y - 4, 300, 32, 8, TFT_DARKCYAN);
         display.setTextColor(TFT_WHITE, item == settingsItem ? TFT_DARKCYAN : TFT_BLACK);
         display.drawString(items[item], center, y);
     }
     display.setFont(uiFont::label());
     display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString(firmwareVersion, center, 310);
+    display.drawString(firmwareVersion, center, 320);
     display.setTextColor(TFT_CYAN, TFT_BLACK);
-    display.drawString("A  Next     B  Select     Red  Back", center, 344);
+    display.drawString("A  Next     B  Select     Red  Back", center, 354);
     drawStatus();
+}
+
+void wakeDisplay() {
+    displayActivityAt = millis();
+    if (!displaySleeping) return;
+    M5.Display.wakeup();
+    displaySleeping = false;
+    if (bluetoothSetup::active()) {
+        bluetoothSetup::redraw();
+    } else if (wifiPicker::active()) {
+        wifiPicker::redraw();
+    } else if (settingsOpen) {
+        drawSettings();
+    } else if (screen == Screen::home) {
+        drawHome(homePrompt());
+    } else {
+        M5.Display.fillScreen(TFT_BLACK);
+        drawStatus();
+        if (screen == Screen::timer) drawTimer(redTimer::snapshot());
+        else conversation.pushSprite(center - conversationWidth / 2, conversationTop);
+    }
+    Serial.println("ORBIT DISPLAY WAKE");
+}
+
+void updateDisplayTimeout(bool menuClicked) {
+    const bool touching = M5.Touch.getCount() && M5.Touch.getDetail().isPressed();
+    if (touching || menuClicked || M5.BtnA.isPressed() || M5.BtnB.isPressed() ||
+        recording || directTurn || playing || (bridgeReady && mood == Mood::thinking)) {
+        wakeDisplay();
+        return;
+    }
+    const unsigned long timeout = displayTimeouts[displayTimeoutIndex].durationMs;
+    if (!displaySleeping && timeout && millis() - displayActivityAt >= timeout) {
+        M5.Display.sleep();
+        displaySleeping = true;
+        Serial.println("ORBIT DISPLAY SLEEP");
+    }
 }
 
 void openSettings() {
@@ -1230,6 +1287,14 @@ void updateButtons() {
                 Preferences preferences;
                 if (preferences.begin("orbit", false)) {
                     preferences.putUChar("volume", speakerVolume);
+                    preferences.end();
+                }
+                drawSettings();
+            } else if (settingsItem == settingsDisplay) {
+                displayTimeoutIndex = (displayTimeoutIndex + 1) % displayTimeoutCount;
+                Preferences preferences;
+                if (preferences.begin("orbit", false)) {
+                    preferences.putUChar("displayTimeout", displayTimeoutIndex);
                     preferences.end();
                 }
                 drawSettings();
@@ -1380,6 +1445,8 @@ void setup() {
     if (preferences.begin("orbit", true)) {
         const uint8_t savedVolume = preferences.getUChar("volume", 100);
         if (savedVolume >= 25 && savedVolume <= 100 && savedVolume % 25 == 0) speakerVolume = savedVolume;
+        const uint8_t savedTimeout = preferences.getUChar("displayTimeout", 0);
+        if (savedTimeout < displayTimeoutCount) displayTimeoutIndex = savedTimeout;
         preferences.end();
     }
     orbitLive::begin();
@@ -1398,6 +1465,7 @@ void setup() {
     Serial.println(flowerReady ? "ORBIT AVATAR READY" : "ORBIT AVATAR FALLBACK");
     onboardingAt = millis() + (orbitLive::configured() ? 12000 : 800);
     showHome();
+    displayActivityAt = millis();
     Serial.printf("ORBIT BOOT reset %d\n", esp_reset_reason());
 }
 
@@ -1407,6 +1475,8 @@ void loop() {
         return;
     }
     M5.update();
+    const bool menuClicked = pollMenuButton();
+    updateDisplayTimeout(menuClicked);
     readSerial();
     checkCloud();
     pollStatus();
@@ -1416,7 +1486,6 @@ void loop() {
     }
     serviceTimer();
     const bool tapped = updateTouch(!settingsOpen && !wifiPicker::active());
-    const bool menuClicked = pollMenuButton();
     if (bluetoothSetup::active()) {
         if (!bluetoothSetup::update(M5.BtnB.wasPressed(), menuClicked)) drawSettings();
         delay(8);

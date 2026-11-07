@@ -186,6 +186,7 @@ void close() {
 }
 
 bool active() { return page != Page::closed; }
+void redraw() { draw(); }
 
 bool update(bool next, bool select, bool back) {
     if (back) {
