@@ -1,85 +1,124 @@
 # Red for M5Stack StopWatch
 
-Red is a tiny voice assistant for the round M5Stack StopWatch (C152). Speak into the watch and it answers through its own speaker, with a short caption on screen. The watch connects to GPT-Live 1 over Wi-Fi. GPT-Live can delegate harder questions to GPT-6 Luna.
+<img src="assets/orbit-flower.png" alt="Red, the flower avatar" width="128">
 
-## Set up standalone Wi-Fi
+**Firmware 0.1.0** · Voice assistant and timer for the round M5Stack StopWatch (C152)
 
-Connect the watch to Windows by USB for setup. Close any running Red bridge, then run these commands from this folder:
+Red is a pocket-sized flower you can talk to. Hold the left button to ask a question, read the live transcript on the watch, and hear the reply from its speaker. Once Wi-Fi is set up, the watch connects directly to GPT-Live. You can unplug USB and use Red on battery.
+
+## What Red can do
+
+| Feature | What it does |
+| --- | --- |
+| Voice chat | Streams your transcript and shows the answer as text and audio arrive. Red carries up to four recent question-and-answer pairs across standalone turns. |
+| Live information | Delegates questions about current facts to web search. Try “What’s tomorrow’s weather in Berlin?” |
+| Voice timer | Starts, checks, extends, and cancels a local countdown. The full-size timer view shows `HH:MM:SS`, with a vibration and chime at zero. |
+| Hands-free mode | Double-click **A** to turn on automatic listening. By default, listening resumes after the spoken reply ends. |
+| Round-screen UI | The flower bounces when you tap the home screen. Swipe to scroll long answers. White status icons show battery percentage, charging, and Wi-Fi strength. |
+| Settings | The bottom red button opens Wi-Fi, saved speaker volume, hands-free mode, and the experimental voice interruption toggle. The firmware version appears below **Back**. |
+| USB demo | The optional Python bridge provides offline mic loopback and canned replies, live voice with a key, typed questions, and a display and speaker smoke test. |
+
+## Get started
+
+You’ll need an M5Stack StopWatch C152, a USB-C data cable, a computer with Python, a 2.4 GHz Wi-Fi network, and an OpenAI project API key for live features. For a new watch, install the firmware using [Build and flash](#build-and-flash) first. The commands below use PowerShell.
 
 ```powershell
 python -m pip install pyserial websocket-client
 python orbit.py --setup-watch
 ```
 
-The watch shows up to five visible 2.4 GHz networks, strongest first. Press **Left** to move the highlight and **Right** to choose. Press Enter in the setup window to use that selection, or type a network name directly. Enter the Wi-Fi password and an OpenAI project API key. If a key is already saved, press Enter at the key prompt to keep it. The password and key prompts hide what you type. Use a key dedicated to this watch. The watch saves both credentials in local flash, which someone with physical access can read.
+1. Connect the watch over USB and close any running Red bridge before launching setup.
+2. The watch shows up to five visible 2.4 GHz networks, strongest first. Press **A** (left) to move and **B** (right) to select. In the terminal, press Enter to use that choice or type the network name directly.
+3. Enter the Wi-Fi password and OpenAI project API key at the hidden prompts. On subsequent setups, press Enter at the key prompt to keep the saved key.
+4. Wait for the connection check to pass. Unplug USB, hold **A** until **Listening** appears, speak, then release.
 
-The scan opens automatically on first setup or after the watch has waited 12 seconds for its saved network. You can also press **Right** from the home screen while Wi-Fi is unavailable. Press the bottom red button to go back. If the watch joins Wi-Fi but still needs to set its clock, it shows **Wi-Fi joined. Syncing clock**.
+Red scans automatically at first setup or after waiting about 12 seconds to join a saved network. You can also scan from Settings, or press **B** from home when Wi-Fi is unavailable. If the watch shows **Wi-Fi joined. Syncing clock**, it is setting its clock for the secure connection.
 
-Once the terminal confirms Wi-Fi, unplug USB and hold the left button until **Listening** appears. Keep holding through the whole question. The watch switches from the avatar to a live transcript, then streams the answer text and audio as they arrive. The watch requires internet access for the AI models.
+Use a dedicated project key for the watch. The API key and Wi-Fi password are stored in local device flash, where someone with physical access can read them. The setup script keeps these credentials out of the repository. Live features require internet access and use your OpenAI project. [GPT-Live model and pricing](https://developers.openai.com/api/docs/models/gpt-live-1)
 
-Red can play and replay up to about 30 seconds of reply audio. Answer length depends on the question, and longer captions scroll on the watch.
+## Controls
 
-The watch uses Roboto Regular at 88 px for the timer, 32 px for transcripts and replies, 24 px for titles and settings options, and 16 px for labels. Conversation text can use the built-in font when it needs glyphs outside the embedded Roboto subset. To regenerate the bitmaps, install Pillow and fonttools and run `python assets/build_transcript_font.py path/to/Roboto-Regular.ttf` using the hinted static font from [Roboto v3.015](https://github.com/googlefonts/roboto-3-classic/releases/tag/v3.015). The SIL Open Font License is in `assets/Roboto-OFL.txt`.
+| Control | What it does |
+| --- | --- |
+| Hold **A**, then release | Ask one question. Hold **A** again while Red is speaking to interrupt and ask another. |
+| Double-click **A** | Toggle hands-free mode in standalone use. |
+| Press **B** | Stop a spoken reply, or replay the most recent reply audio when idle. |
+| Hold **B** | Return to the avatar from a finished reply or timer. A running timer continues counting. |
+| Press the bottom red button | Open or close Settings, or go back from the Wi-Fi picker. Hold **A** and **B** together as another way to open Settings. |
+| **A** / **B** in Settings | Move to the next option / select it. Volume cycles through 25%, 50%, 75%, and 100%. |
+| Tap or swipe | Tap the home screen to make Red bounce. Swipe up or down on a long reply to read more. |
 
-## Standalone controls
+The watch records up to about eight seconds per question and buffers up to about 30 seconds of reply audio. Conversation context clears on restart. **Voice interrupt beta** allows simultaneous mic and speaker audio in hands-free mode. It defaults to off while we improve echo handling and speech capture.
 
-- **Hold A** to ask one question. Release A when you finish. You can hold A again while Red is speaking to interrupt and ask a new question.
-- **Double-click A** to toggle hands-free mode. Give the mic a moment to start, then speak without holding a button. Hands-free listening resumes after Red finishes speaking. Hands-free mode uses more battery while idle.
-- **Press B** to stop a reply or replay the last completed reply when idle. **Hold B** on a completed reply to go home.
-- **Press the bottom red button** to open or close settings. Holding A and B together also opens it. Press A to move and B to select. You can scan for Wi-Fi, change the saved volume in 25% steps, or toggle hands-free mode. Use the USB setup command to enter a new Wi-Fi password.
-- **Tap the home screen** to make Red bounce. **Swipe up or down on a long reply** to read it. The scroll indicator shows how much text is left.
-- **Check the status icons** above the avatar. The battery shows the percentage and a lightning bolt while charging. The Wi-Fi icon shows signal strength or a slash when disconnected.
+## Try the timer
 
-**Voice interrupt beta** enables experimental simultaneous mic and speaker audio in hands-free mode. It defaults to off because that capture path can miss speech. Hold A for an immediate interruption in either mode.
+Hold **A** and say “Set a timer for seven minutes.” Red confirms the start and opens the countdown on the same canvas used for replies and transcripts. Try “How much time is left?”, “Add one minute,” or “Cancel the timer” on the next turn.
 
-For current information, Red can delegate to web search over Wi-Fi. Include the city in a forecast question, such as “What's tomorrow's weather in Berlin?”
+Red supports one timer from one second to 24 hours. A second start request leaves a running timer in place. At expiry, `00:00:00` turns orange and stays visible on the timer screen. The watch vibrates and plays a chime, which waits if the speaker is busy. Once a timer starts, it runs on the watch even if Wi-Fi drops. Keep the watch powered on.
 
-For follow-up questions, Red carries up to four recent question-and-answer pairs into each new standalone voice session. This context clears when the watch restarts.
+## How it works
 
-## Timer
+In standalone mode, the ESP32-S3 streams microphone audio directly to GPT-Live 1 over Wi-Fi. GPT-Live sends back transcription, reply text, and speech. GPT-6 Luna handles delegated web searches and can call the watch’s timer tool. The firmware applies timer commands locally and returns the actual result before Red confirms an action.
 
-In standalone Wi-Fi mode, hold **A** and say “Set a timer for seven minutes.” Red opens a large HH:MM:SS countdown after confirming the start, an extension, or a status check. Hold **B** to return to the avatar while the timer runs. Ask “How much time is left?”, “Add one minute,” or “Cancel the timer” in a later turn. Red supports one countdown from one second to 24 hours. When it expires, the watch vibrates and plays a chime. The countdown and alert run locally after the voice command succeeds, even if Wi-Fi drops. Keep the watch powered on.
+| Path | What lives there |
+| --- | --- |
+| [`src/main.cpp`](src/main.cpp) | Screens, buttons and touch, microphone and speaker playback, settings, and timer alerts |
+| [`src/orbit_live.cpp`](src/orbit_live.cpp) | GPT-Live WebSocket, captions, recent conversation context, and delegated tool results |
+| [`src/red_timer.cpp`](src/red_timer.cpp) | Local timer state and countdown |
+| [`src/wifi_picker.cpp`](src/wifi_picker.cpp) | Wi-Fi scan and on-watch selection |
+| [`src/duplex_audio.cpp`](src/duplex_audio.cpp) | Experimental simultaneous capture and playback with echo cancellation |
+| [`assets/`](assets/) | Flower artwork and embedded Roboto bitmap fonts |
+| [`orbit.py`](orbit.py) and [`orbit_voice.py`](orbit_voice.py) | USB provisioning, demo and smoke test, and optional live voice bridge |
+| [`tools/push_before_upload.py`](tools/push_before_upload.py) | GitHub sync before firmware upload |
 
-## To-do
+## USB demo and diagnostics
 
-- Let the user set a local timezone and use it when answering time-sensitive questions.
-
-## USB demo and typed questions
-
-In PowerShell, from this folder:
+Run these from the repository with the watch connected. Install the Python dependencies from [Get started](#get-started) first.
 
 ```powershell
-python -m pip install pyserial websocket-client
 python orbit.py --demo
+python orbit.py --smoke-test
+python orbit.py --ask-key
 ```
 
-- **Left button (A)** — Hold until the green **Listening** screen appears, speak, then release. Red takes up to eight seconds of speech. In offline demo mode it plays back what the mic captured.
-- **Right button (B)** — Press to replay the most recent spoken reply.
-- **Touchscreen** — Tap the home screen to make Red bounce. Swipe to scroll a long reply.
+- **Demo** loops back what the mic captured and provides canned replies for typed questions. It works without an API key.
+- **Smoke test** sends a sample reply and a short tone to check the display and speaker transport.
+- **Live bridge** uses a hidden API key prompt, or the `OPENAI_API_KEY` environment variable. Voice sessions start after you release **A**. You can also type a question in the terminal for a GPT-6 Luna text reply. The watch shows a bounded copy of the terminal text.
 
-For live voice over USB, run `python orbit.py --ask-key` and enter an OpenAI API key at the hidden prompt. You can also set `OPENAI_API_KEY` in your terminal session and run `python orbit.py`. In USB mode each button recording opens one short voice session after release. Live replies use an AI-generated voice. Type in the terminal for a text answer from GPT-6 Luna. The terminal shows the full caption and the watch shows the portion that fits its ASCII font.
-
-Use `/quit` or Ctrl+C to close the bridge. If autodetection finds multiple Espressif devices, add `--port COM7` or the current StopWatch port. GPT-Live 1 charges by session duration. [Model and pricing](https://developers.openai.com/api/docs/models/gpt-live-1)
+Run one mode at a time. Use `/quit` or Ctrl+C to close the bridge. If autodetection finds multiple Espressif devices, pass `--port COM7` or substitute the watch’s current port.
 
 ## Build and flash
 
-Commit the changes you want on the watch before running the upload command. PlatformIO requires a clean Git branch and pushes the built revision to the same branch on `origin` before it flashes. If the push fails, the upload stops. A build without the upload target works locally without GitHub access.
+Install Git and authenticate to the GitHub remote. Commit the changes you want on the watch and close the USB bridge before uploading.
 
 ```powershell
-python -m pip install platformio
+python -m pip install platformio pyserial websocket-client
 python -m platformio run
+python -m serial.tools.list_ports -v
 python -m platformio run --target upload --upload-port COM7
-python orbit.py --smoke-test
 ```
 
-Close the bridge before uploading. If the uploader cannot connect, leave the USB cable attached and hold the watch's power button until the green LED blinks. Release it and check the port with `python -m serial.tools.list_ports -v` before retrying. See the [M5Stack StopWatch documentation](https://docs.m5stack.com/en/core/StopWatch) for download mode and factory firmware recovery.
+Replace `COM7` with the watch’s port. A local build works without pushing. The upload target requires a clean Git branch and pushes the built source revision to the matching branch on `origin` before writing to the watch. A failed push stops the upload.
 
-Hands-free echo cancellation uses the bundled echo and preprocessing code from [SpeexDSP 1.2.1](https://github.com/xiph/speexdsp). Its license is in `lib/speexdsp/COPYING`.
+If the uploader cannot connect, leave USB attached and hold the power button until the green LED blinks. Release it, list the ports again, and retry with the reported port. [M5Stack StopWatch documentation](https://docs.m5stack.com/en/core/StopWatch)
 
-## Restore the original flash
+### Fonts and dependencies
 
-For the watch used in this demo, the pre-upload backup is stored locally at `%LOCALAPPDATA%\OrbitStopWatch\stopwatch-backup.bin`. To restore that same watch, close the bridge and run the following with its current serial port:
+Red uses native-size 88 px Roboto Regular for the timer, 32 px for transcripts and replies, 24 px for titles and settings options, and 16 px for labels. Conversation text uses a built-in fallback when it needs glyphs outside the embedded subset. To regenerate the bitmaps, install Pillow and fonttools and run `python assets/build_transcript_font.py path/to/Roboto-Regular.ttf` with the hinted static font. [Roboto v3.015](https://github.com/googlefonts/roboto-3-classic/releases/tag/v3.015) · [Roboto license](assets/Roboto-OFL.txt)
+
+The experimental echo cancellation path uses the bundled SpeexDSP 1.2.1 code. [SpeexDSP license](lib/speexdsp/COPYING)
+
+### Restore the original flash
+
+The original demo watch has a local backup at `%LOCALAPPDATA%\OrbitStopWatch\stopwatch-backup.bin`. Use the backup only on the watch it came from. Close the bridge and substitute the current serial port.
 
 ```powershell
 python "$env:USERPROFILE\.platformio\packages\tool-esptoolpy\esptool.py" --chip esp32s3 --port COM7 --baud 921600 write_flash 0x0 "$env:LOCALAPPDATA\OrbitStopWatch\stopwatch-backup.bin"
 ```
+
+## What’s next
+
+- Add a local timezone setting for time-sensitive questions and future calendar alerts.
+- Make hands-free transcription and interruption more reliable.
+- Revisit battery indicator placement.
+- Explore named timers, read-only calendar lookups with reminders, and a shared task list.
