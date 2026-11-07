@@ -55,6 +55,7 @@ constexpr char sessionStart[] = R"JSON({
 })JSON";
 constexpr char audioPrefix[] = "{\"type\":\"session.input_audio.append\",\"audio\":\"";
 String apiHeader;
+bool wifiSaved = false;
 esp_websocket_client_handle_t socket = nullptr;
 std::atomic<bool> connected{false};
 std::atomic<bool> accepted{false};
@@ -140,16 +141,33 @@ struct PsramAllocator {
     }
 };
 
-bool validSettings(JsonDocument& settings) {
+bool validSettings(JsonDocument& settings, bool requireKey) {
     const String ssid = settings["ssid"] | "";
     const String password = settings["password"] | "";
     const String key = settings["key"] | "";
-    if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 ||
-        !key.startsWith("sk-") || key.length() > 250) return false;
+    if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63) return false;
+    if (key.isEmpty()) return !requireKey;
+    if (!key.startsWith("sk-") || key.length() > 250) return false;
     for (char ch : key) {
         if (!(isalnum(static_cast<unsigned char>(ch)) || ch == '-' || ch == '_')) return false;
     }
     return true;
+}
+
+bool storeSettings(JsonDocument& settings, bool requireKey) {
+    Preferences nvs;
+    if (!nvs.begin("orbit", false)) return false;
+    if (String(settings["key"] | "").isEmpty()) {
+        StaticJsonDocument<768> previous;
+        if (!deserializeJson(previous, nvs.getString("setup"))) {
+            settings["key"] = String(previous["key"] | "");
+        }
+    }
+    String merged;
+    if (validSettings(settings, requireKey)) serializeJson(settings, merged);
+    const bool stored = !merged.isEmpty() && nvs.putString("setup", merged) == merged.length();
+    nvs.end();
+    return stored;
 }
 
 void queueTimerCall(JsonObjectConst item) {
@@ -391,10 +409,14 @@ void begin() {
     String saved = nvs.getString("setup");
     nvs.end();
     StaticJsonDocument<768> settings;
-    if (deserializeJson(settings, saved) || !validSettings(settings)) return;
-    apiHeader = "Authorization: Bearer ";
-    apiHeader += settings["key"].as<const char*>();
-    apiHeader += "\r\n";
+    if (deserializeJson(settings, saved) || !validSettings(settings, false)) return;
+    wifiSaved = true;
+    const char* key = settings["key"] | "";
+    if (*key) {
+        apiHeader = "Authorization: Bearer ";
+        apiHeader += key;
+        apiHeader += "\r\n";
+    }
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
@@ -405,25 +427,24 @@ void begin() {
 bool provision(const String& setup) {
     StaticJsonDocument<768> settings;
     if (deserializeJson(settings, setup)) return false;
-    Preferences nvs;
-    if (!nvs.begin("orbit", false)) return false;
-    if (String(settings["key"] | "").isEmpty()) {
-        StaticJsonDocument<768> previous;
-        if (!deserializeJson(previous, nvs.getString("setup"))) {
-            settings["key"] = String(previous["key"] | "");
-        }
-    }
-    String merged;
-    if (validSettings(settings)) serializeJson(settings, merged);
-    const bool stored = !merged.isEmpty() && nvs.putString("setup", merged) == merged.length();
-    nvs.end();
-    return stored;
+    return storeSettings(settings, true);
 }
 
-bool configured() { return !apiHeader.isEmpty(); }
+bool saveWifi(const char* ssid, const char* password) {
+    StaticJsonDocument<768> settings;
+    settings["ssid"] = ssid;
+    settings["password"] = password;
+    if (!storeSettings(settings, false)) return false;
+    wifiSaved = true;
+    configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
+    return true;
+}
+
+bool configured() { return wifiSaved; }
+bool hasKey() { return !apiHeader.isEmpty(); }
 bool wifiConnected() { return WiFi.status() == WL_CONNECTED; }
 int wifiSignal() { return wifiConnected() ? WiFi.RSSI() : 0; }
-bool ready() { return wifiConnected() && time(nullptr) > 1700000000; }
+bool ready() { return hasKey() && wifiConnected() && time(nullptr) > 1700000000; }
 bool listening() { return accepted && !error; }
 bool failed() { return error; }
 bool canRetryTurn() {

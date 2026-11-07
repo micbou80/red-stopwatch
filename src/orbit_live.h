@@ -5,7 +5,9 @@
 namespace orbitLive {
 void begin();
 bool provision(const String& settings);
+bool saveWifi(const char* ssid, const char* password);
 bool configured();
+bool hasKey();
 bool wifiConnected();
 int wifiSignal();
 bool ready();

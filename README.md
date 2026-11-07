@@ -2,7 +2,7 @@
 
 <img src="assets/orbit-flower.png" alt="Red, the flower avatar" width="128">
 
-**Firmware 0.1.0** · Voice assistant and timer for the round M5Stack StopWatch (C152)
+**Firmware 0.2.0** · Voice assistant and timer for the round M5Stack StopWatch (C152)
 
 Red is a pocket-sized flower you can talk to. Hold the left button to ask a question, read the live transcript on the watch, and hear the reply from its speaker. Once Wi-Fi is set up, the watch connects directly to GPT-Live. You can unplug USB and use Red on battery.
 
@@ -15,7 +15,7 @@ Red is a pocket-sized flower you can talk to. Hold the left button to ask a ques
 | Voice timer | Starts, checks, extends, and cancels a local countdown. The full-size timer view shows `HH:MM:SS`, with a vibration and chime at zero. |
 | Hands-free mode | Double-click **A** to turn on automatic listening. By default, listening resumes after the spoken reply ends. |
 | Round-screen UI | The flower bounces when you tap the home screen. Swipe to scroll long answers. White status icons show battery percentage, charging, and Wi-Fi strength. |
-| Settings | The bottom red button opens Wi-Fi, saved speaker volume, hands-free mode, and the experimental voice interruption toggle. The firmware version appears below **Back**. |
+| Settings | The bottom red button opens Wi-Fi, Bluetooth setup, saved speaker volume, hands-free mode, and the experimental voice interruption toggle. The firmware version appears below **Back**. |
 | USB demo | The optional Python bridge provides offline mic loopback and canned replies, live voice with a key, typed questions, and a display and speaker smoke test. |
 
 ## Get started
@@ -35,6 +35,16 @@ python orbit.py --setup-watch
 Red scans automatically at first setup or after waiting about 12 seconds to join a saved network. You can also scan from Settings, or press **B** from home when Wi-Fi is unavailable. If the watch shows **Wi-Fi joined. Syncing clock**, it is setting its clock for the secure connection.
 
 Use a dedicated project key for the watch. The API key and Wi-Fi password are stored in local device flash, where someone with physical access can read them. The setup script keeps these credentials out of the repository. Live features require internet access and use your OpenAI project. [GPT-Live model and pricing](https://developers.openai.com/api/docs/models/gpt-live-1)
+
+## Pair a phone over Bluetooth
+
+Use Bluetooth setup to send a new Wi-Fi network to Red from a phone. Red keeps its saved OpenAI key. Use the USB setup above for the initial API key.
+
+1. Press the bottom red button to open Settings. Press **A** to highlight **Bluetooth setup**, then **B** to open it.
+2. Open **ESP BLE Provisioning** on the phone and scan the QR code on Red. For manual setup in the app, look for the `PROV_RED_…` device and enter the code shown on the watch. [iPhone and iPad](https://apps.apple.com/app/esp-ble-provisioning/id1473590141) · [Android](https://play.google.com/store/apps/details?id=com.espressif.provble)
+3. Choose a 2.4 GHz Wi-Fi network in the app and enter its password. Wait for **Wi-Fi saved** on Red, then press the bottom red button to return to Settings.
+
+Pairing uses a fresh code and closes after two minutes. You can cancel with the bottom red button. If the network fails to join, use **B** to retry. Red saves the new network after a successful connection and restores the previous network on cancel or timeout. [Espressif’s BLE provisioning guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.8/esp32s3/api-reference/provisioning/wifi_provisioning.html)
 
 ## Controls
 
@@ -66,6 +76,7 @@ In standalone mode, the ESP32-S3 streams microphone audio directly to GPT-Live 1
 | [`src/orbit_live.cpp`](src/orbit_live.cpp) | GPT-Live WebSocket, captions, recent conversation context, and delegated tool results |
 | [`src/red_timer.cpp`](src/red_timer.cpp) | Local timer state and countdown |
 | [`src/wifi_picker.cpp`](src/wifi_picker.cpp) | Wi-Fi scan and on-watch selection |
+| [`src/bluetooth_setup.cpp`](src/bluetooth_setup.cpp) | Phone pairing and Wi-Fi provisioning over BLE |
 | [`src/duplex_audio.cpp`](src/duplex_audio.cpp) | Experimental simultaneous capture and playback with echo cancellation |
 | [`assets/`](assets/) | Flower artwork and embedded Roboto bitmap fonts |
 | [`orbit.py`](orbit.py) and [`orbit_voice.py`](orbit_voice.py) | USB provisioning, demo and smoke test, and optional live voice bridge |

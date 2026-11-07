@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <atomic>
 #include <vector>
+#include "bluetooth_setup.h"
 #include "duplex_audio.h"
 #include "orbit_live.h"
 #include "red_timer.h"
@@ -15,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.1.0";
+constexpr char firmwareVersion[] = "FW 0.2.0";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -56,6 +57,9 @@ constexpr int dragLineHeight = 24;
 
 enum class Mood { idle, listening, thinking, answer, error };
 enum class Screen { home, transcript, answer, timer };
+enum SettingsOption {
+    settingsWifi, settingsBluetooth, settingsVolume, settingsHandsFree, settingsInterrupt, settingsBack, settingsCount
+};
 Mood mood = Mood::idle;
 Screen screen = Screen::home;
 M5Canvas flower(&M5.Display);
@@ -380,13 +384,13 @@ void updateReplyCaption() {
 
 const char* networkStatus() {
     if (orbitLive::ready()) return "READY";
-    if (orbitLive::wifiConnected()) return "CLOCK";
+    if (orbitLive::wifiConnected()) return orbitLive::hasKey() ? "CLOCK" : "NO KEY";
     return orbitLive::configured() ? "WAIT" : "UNSET";
 }
 
 const char* homePrompt() {
     if (bridgeReady || orbitLive::ready()) return hotMic && !bridgeReady ? "Speak to Red" : "Hold A to talk";
-    if (orbitLive::wifiConnected()) return "Wi-Fi joined. Syncing clock";
+    if (orbitLive::wifiConnected()) return orbitLive::hasKey() ? "Wi-Fi joined. Syncing clock" : "Add OpenAI key over USB";
     return orbitLive::configured() ? "Joining Wi-Fi. B: Scan" : "B: Find Wi-Fi";
 }
 
@@ -469,7 +473,7 @@ void pollStatus() {
     batteryPercent = percent;
     batteryCharging = charging;
     wifiBars = bars;
-    if (!wifiPicker::active()) drawStatus();
+    if (!wifiPicker::active() && !bluetoothSetup::active()) drawStatus();
 }
 
 void drawAvatar(int lift) {
@@ -1123,20 +1127,20 @@ void drawSettings() {
     display.setTextDatum(top_center);
     display.setTextSize(1);
     display.setFont(uiFont::title());
-    const String items[] = {"Wi-Fi networks", "Volume " + String(speakerVolume) + "%",
+    const String items[] = {"Wi-Fi networks", "Bluetooth setup", "Volume " + String(speakerVolume) + "%",
                             hotMic ? "Hands-free on" : "Hands-free off",
                             voiceInterruptBeta ? "Voice interrupt beta on" : "Voice interrupt beta off", "Back"};
-    for (int item = 0; item < 5; ++item) {
-        const int y = 94 + item * 39;
+    for (int item = 0; item < settingsCount; ++item) {
+        const int y = 88 + item * 36;
         if (item == settingsItem) display.fillRoundRect(center - 150, y - 4, 300, 35, 8, TFT_DARKCYAN);
         display.setTextColor(TFT_WHITE, item == settingsItem ? TFT_DARKCYAN : TFT_BLACK);
         display.drawString(items[item], center, y);
     }
     display.setFont(uiFont::label());
     display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString(firmwareVersion, center, 292);
+    display.drawString(firmwareVersion, center, 310);
     display.setTextColor(TFT_CYAN, TFT_BLACK);
-    display.drawString("A  Next     B  Select     Red  Back", center, 326);
+    display.drawString("A  Next     B  Select     Red  Back", center, 344);
     drawStatus();
 }
 
@@ -1206,15 +1210,22 @@ void updateButtons() {
         return;
     }
     if (settingsOpen) {
-        if (b.wasPressed() && settingsItem == 4) {
+        if (b.wasPressed() && settingsItem == settingsBack) {
             closeSettings();
         } else if (a.wasPressed()) {
-            settingsItem = (settingsItem + 1) % 5;
+            settingsItem = (settingsItem + 1) % settingsCount;
             drawSettings();
         } else if (b.wasPressed()) {
-            if (settingsItem == 0) {
+            if (settingsItem == settingsWifi) {
                 openPicker();
-            } else if (settingsItem == 1) {
+            } else if (settingsItem == settingsBluetooth) {
+                if (checkingCloud) {
+                    checkingCloud = false;
+                    orbitLive::closeAsync();
+                }
+                autoScan = false;
+                bluetoothSetup::open();
+            } else if (settingsItem == settingsVolume) {
                 speakerVolume = speakerVolume == 100 ? 25 : speakerVolume + 25;
                 Preferences preferences;
                 if (preferences.begin("orbit", false)) {
@@ -1222,10 +1233,10 @@ void updateButtons() {
                     preferences.end();
                 }
                 drawSettings();
-            } else if (!bridgeReady && settingsItem == 2) {
+            } else if (!bridgeReady && settingsItem == settingsHandsFree) {
                 toggleHotMic();
                 drawSettings();
-            } else if (!bridgeReady && settingsItem == 3) {
+            } else if (!bridgeReady && settingsItem == settingsInterrupt) {
                 voiceInterruptBeta = !voiceInterruptBeta;
                 drawSettings();
             }
@@ -1264,6 +1275,7 @@ void updateButtons() {
 }
 
 void handleCommand(const String& command) {
+    if (bluetoothSetup::active() && command != "WIFI STATUS") return;
     if (command == "WIFI STATUS") {
         Serial.print("ORBIT WIFI ");
         Serial.println(networkStatus());
@@ -1405,6 +1417,11 @@ void loop() {
     serviceTimer();
     const bool tapped = updateTouch(!settingsOpen && !wifiPicker::active());
     const bool menuClicked = pollMenuButton();
+    if (bluetoothSetup::active()) {
+        if (!bluetoothSetup::update(M5.BtnB.wasPressed(), menuClicked)) drawSettings();
+        delay(8);
+        return;
+    }
     if (wifiPicker::active()) {
         if (!wifiPicker::update(M5.BtnA.wasPressed(), M5.BtnB.wasPressed(), menuClicked)) {
             if (settingsOpen) drawSettings();
