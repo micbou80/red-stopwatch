@@ -36,7 +36,6 @@ constexpr size_t usbChunk = 1024;
 constexpr size_t speakerChunk = sampleRate / 5;
 constexpr size_t speakerPreroll = sampleRate * 80 / 1000;
 constexpr unsigned long holdToTalkMs = 180;
-constexpr unsigned long holdToHomeMs = 500;
 constexpr unsigned long doubleClickMs = 380;
 constexpr unsigned long settingsHoldMs = 750;
 constexpr unsigned long micWarmupMs = 350;
@@ -57,6 +56,8 @@ constexpr int dragLineHeight = 24;
 
 enum class Mood { idle, listening, thinking, answer, error };
 enum class Screen { home, transcript, answer, timer, camera };
+enum class Chord { idle, settingsShortcut, consumed };
+enum class MenuAction { none, next, back, select };
 enum SettingsOption {
     settingsWifi, settingsBluetooth, settingsVolume, settingsDisplay, settingsHandsFree,
     settingsInterrupt, settingsBack, settingsCount
@@ -99,6 +100,8 @@ bool recording = false;
 size_t micQueued = 0;
 std::atomic<size_t> micCompleted{0};
 bool playing = false;
+bool bridgeVoicePending = false;
+bool bridgeReplyDismissed = false;
 bool directTurn = false;
 bool directFinished = false;
 bool pendingSession = false;
@@ -148,7 +151,7 @@ bool autoPrimed = false;
 unsigned long nextMicWarmupAt = 0;
 unsigned long autoRearmAt = 0;
 bool aHandled = false;
-bool chordHeld = false;
+Chord chord = Chord::idle;
 unsigned long lastClickAt = 0;
 bool settingsOpen = false;
 int settingsItem = 0;
@@ -258,9 +261,9 @@ void drawReply() {
     if (maxReplyScroll()) {
         snprintf(footer, sizeof(footer), "Swipe %d-%d/%d   %s",
                  firstReplyLine + 1, min(count, firstReplyLine + visibleLines), count,
-                 replyStreaming ? "Receiving..." : "Hold B for home");
+                 replyStreaming ? "Receiving..." : "B: Back");
     } else {
-        snprintf(footer, sizeof(footer), "%s", replyStreaming ? "Receiving reply..." : "Hold B for home");
+        snprintf(footer, sizeof(footer), "%s", replyStreaming ? "Receiving reply..." : "B: Back");
     }
     const uint16_t accent = conversation.color565(255, 104, 123);
     if (replyLines.empty()) {
@@ -359,7 +362,7 @@ void show(Mood state, const String& message) {
         drawHome(message);
     } else {
         const char* footer = mood == Mood::listening ? (autoRecording ? "Speak naturally" : "Release A when done") :
-                             mood == Mood::error ? "Hold A to retry   Hold B for home" : "Hold A to start over";
+                             mood == Mood::error ? "Hold A to retry   /   B: Back" : "B: Back";
         drawTranscript(message, footer);
     }
 }
@@ -386,7 +389,7 @@ void updateInputCaption(bool force = false) {
     if (!force && input == displayedInput && status == displayedInputStatus) return;
     displayedInputStatus = status;
     displayedInput = input;
-    if (input.isEmpty()) drawTranscript(status, "Hold A to start over");
+    if (input.isEmpty()) drawTranscript(status, "B: Back");
     else drawTranscript(input, status, true);
 }
 
@@ -413,7 +416,7 @@ const char* networkStatus() {
 const char* homePrompt() {
     if (bridgeReady || orbitLive::ready()) return hotMic && !bridgeReady ? "Speak to Red" : "Hold A to talk";
     if (orbitLive::wifiConnected()) return orbitLive::hasKey() ? "Wi-Fi joined. Syncing clock" : "Add OpenAI key over USB";
-    return orbitLive::configured() ? "Joining Wi-Fi. B: Scan" : "B: Find Wi-Fi";
+    return orbitLive::configured() ? "Joining Wi-Fi" : "Find Wi-Fi in Settings";
 }
 
 void drawTimer(redTimer::Snapshot timer) {
@@ -434,7 +437,7 @@ void drawTimer(redTimer::Snapshot timer) {
     panel.setTextSize(1);
     panel.setTextDatum(top_center);
     panel.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    panel.drawString(finished ? "Timer done   /   Hold B for home" : "Hold B for home",
+    panel.drawString(finished ? "Timer done   /   B: Back" : "B: Back",
                      conversationWidth / 2, footerY);
     panel.pushSprite(center - conversationWidth / 2, conversationTop);
 }
@@ -474,7 +477,7 @@ bool showCamera() {
     panel.setTextSize(1);
     panel.setTextDatum(top_center);
     panel.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    panel.drawString("Snapshot   /   Hold B for home", conversationWidth / 2, footerY);
+    panel.drawString("Snapshot   /   B: Back", conversationWidth / 2, footerY);
     panel.pushSprite(center - conversationWidth / 2, conversationTop);
     Serial.println("ORBIT CAMERA DISPLAYED");
     return true;
@@ -769,7 +772,7 @@ bool playReply() {
     return playing;
 }
 
-void receiveReply(const String& sizeText) {
+void receiveReply(const String& sizeText, bool dismissed) {
     char* end = nullptr;
     const unsigned long size = strtoul(sizeText.c_str(), &end, 10);
     if (!playback || recording || directTurn || playing || !size || size % 2 ||
@@ -784,10 +787,15 @@ void receiveReply(const String& sizeText) {
         Serial.println("ORBIT RX");
         if (Serial.readBytes(bytes + offset, count) != count) {
             Serial.println("ORBIT AUDIO ERROR");
-            show(Mood::error, "Audio transfer failed");
+            if (!dismissed) show(Mood::error, "Audio transfer failed");
             return;
         }
         offset += count;
+    }
+    if (dismissed) {
+        // Acknowledge the USB transfer so the bridge can handle the next turn.
+        Serial.println("ORBIT PLAYING");
+        return;
     }
     playable = size / sizeof(int16_t);
     Serial.println(playReply() ? "ORBIT PLAYING" : "ORBIT AUDIO ERROR");
@@ -800,6 +808,10 @@ void stopRecording() {
 }
 
 void cancelTurn() {
+    if (bridgeReady) {
+        if (recording) Serial.println("ORBIT MIC SHORT");
+        if (bridgeVoicePending || mood == Mood::thinking) bridgeReplyDismissed = true;
+    }
     stopRecording();
     if (directTurn && !directFinished && !pendingSession) orbitLive::closeAsync();
     pendingSession = false;
@@ -1057,6 +1069,7 @@ void updateMic() {
             return;
         }
         show(Mood::thinking, "Waiting for the USB bridge...");
+        bridgeVoicePending = true;
         const size_t size = captured * sizeof(int16_t);
         Serial.printf("ORBIT MIC %u\n", static_cast<unsigned int>(size));
         Serial.write(reinterpret_cast<const uint8_t*>(capture), size);
@@ -1064,6 +1077,7 @@ void updateMic() {
 }
 
 void startRecording(bool handsFree = false) {
+    if (bridgeReady && bridgeReplyDismissed && bridgeVoicePending) return;
     wakeDisplay();
     if (!capture || !playback) {
         show(Mood::error, "Audio memory unavailable");
@@ -1124,7 +1138,7 @@ void startRecording(bool handsFree = false) {
 
 void updateStandby(unsigned long now) {
     if (!hotMic || bridgeReady || !orbitLive::ready() || checkingCloud || recording ||
-        chordHeld || M5.BtnA.isPressed() || M5.BtnB.isPressed() ||
+        chord != Chord::idle || M5.BtnA.isPressed() || M5.BtnB.isPressed() ||
         static_cast<long>(now - autoRearmAt) < 0) return;
     if (!micRunning()) {
         if (directTurn || playing || static_cast<long>(now - nextMicWarmupAt) < 0) return;
@@ -1206,7 +1220,7 @@ void drawSettings() {
     display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
     display.drawString(firmwareVersion, center, 320);
     display.setTextColor(TFT_CYAN, TFT_BLACK);
-    display.drawString("A  Next     B  Select     Red  Back", center, 354);
+    display.drawString("A: Next     B: Back     A+B: Select", center, 354);
     drawStatus();
 }
 
@@ -1281,7 +1295,14 @@ void updateDisplayTimeout(bool menuClicked) {
     }
 }
 
+void consumeHeldButtons() {
+    chord = M5.BtnA.isPressed() || M5.BtnB.isPressed() ? Chord::consumed : Chord::idle;
+    aHandled = true;
+    lastClickAt = 0;
+}
+
 void openSettings() {
+    consumeHeldButtons();
     cancelTurn();
     stopMic();
     duplexAudio::end();
@@ -1296,7 +1317,7 @@ void openSettings() {
 
 void closeSettings() {
     settingsOpen = false;
-    chordHeld = M5.BtnA.isPressed() || M5.BtnB.isPressed();
+    consumeHeldButtons();
     returnToReplyOrHome();
     Serial.println("ORBIT MENU CLOSED");
 }
@@ -1324,68 +1345,90 @@ bool pollMenuButton() {
     return M5.BtnPWR.wasClicked();
 }
 
-void updateButtons() {
-    auto& a = M5.BtnA;
-    auto& b = M5.BtnB;
+MenuAction readMenuAction() {
+    const auto& a = M5.BtnA;
+    const auto& b = M5.BtnB;
+    if (chord != Chord::idle) {
+        if (!a.isPressed() && !b.isPressed()) chord = Chord::idle;
+        return MenuAction::none;
+    }
     if (a.isPressed() && b.isPressed()) {
-        if (!chordHeld) {
-            chordHeld = true;
+        chord = Chord::consumed;
+        return MenuAction::select;
+    }
+    // Solo presses act on release so either button can start a chord.
+    if (a.wasReleased()) return MenuAction::next;
+    if (b.wasReleased()) return MenuAction::back;
+    return MenuAction::none;
+}
+
+void updateSettings(MenuAction action) {
+    if (action == MenuAction::back || (action == MenuAction::select && settingsItem == settingsBack)) {
+        closeSettings();
+    } else if (action == MenuAction::next) {
+        settingsItem = (settingsItem + 1) % settingsCount;
+        drawSettings();
+    } else if (action == MenuAction::select) {
+        if (settingsItem == settingsWifi) {
+            openPicker();
+        } else if (settingsItem == settingsBluetooth) {
+            if (checkingCloud) {
+                checkingCloud = false;
+                orbitLive::closeAsync();
+            }
+            autoScan = false;
+            bluetoothSetup::open();
+        } else if (settingsItem == settingsVolume) {
+            speakerVolume = speakerVolume == 100 ? 25 : speakerVolume + 25;
+            Preferences preferences;
+            if (preferences.begin("orbit", false)) {
+                preferences.putUChar("volume", speakerVolume);
+                preferences.end();
+            }
+            drawSettings();
+        } else if (settingsItem == settingsDisplay) {
+            displayTimeoutIndex = (displayTimeoutIndex + 1) % displayTimeoutCount;
+            Preferences preferences;
+            if (preferences.begin("orbit", false)) {
+                preferences.putUChar("displayTimeout", displayTimeoutIndex);
+                preferences.end();
+            }
+            drawSettings();
+        } else if (!bridgeReady && settingsItem == settingsHandsFree) {
+            toggleHotMic();
+            drawSettings();
+        } else if (!bridgeReady && settingsItem == settingsInterrupt) {
+            voiceInterruptBeta = !voiceInterruptBeta;
+            drawSettings();
+        }
+    }
+}
+
+void goBack() {
+    lastClickAt = 0;
+    if (screen == Screen::home && !recording && !directTurn && !playing) return;
+    cancelTurn();
+    showHome();
+}
+
+void updateButtons() {
+    const auto& a = M5.BtnA;
+    const auto& b = M5.BtnB;
+    if (a.isPressed() && b.isPressed()) {
+        if (chord == Chord::idle) {
+            chord = Chord::settingsShortcut;
             aHandled = true;
             lastClickAt = 0;
-            if (recording) {
-                cancelTurn();
-                showHome();
-            }
+            if (recording) goBack();
         }
-        if (!settingsOpen && a.pressedFor(settingsHoldMs) && b.pressedFor(settingsHoldMs)) {
+        if (chord == Chord::settingsShortcut && a.pressedFor(settingsHoldMs) && b.pressedFor(settingsHoldMs)) {
             openSettings();
         }
         return;
     }
-    if (chordHeld) {
-        if (!a.isPressed() && !b.isPressed()) chordHeld = false;
-        return;
-    }
-    if (settingsOpen) {
-        if (b.wasPressed() && settingsItem == settingsBack) {
-            closeSettings();
-        } else if (a.wasPressed()) {
-            settingsItem = (settingsItem + 1) % settingsCount;
-            drawSettings();
-        } else if (b.wasPressed()) {
-            if (settingsItem == settingsWifi) {
-                openPicker();
-            } else if (settingsItem == settingsBluetooth) {
-                if (checkingCloud) {
-                    checkingCloud = false;
-                    orbitLive::closeAsync();
-                }
-                autoScan = false;
-                bluetoothSetup::open();
-            } else if (settingsItem == settingsVolume) {
-                speakerVolume = speakerVolume == 100 ? 25 : speakerVolume + 25;
-                Preferences preferences;
-                if (preferences.begin("orbit", false)) {
-                    preferences.putUChar("volume", speakerVolume);
-                    preferences.end();
-                }
-                drawSettings();
-            } else if (settingsItem == settingsDisplay) {
-                displayTimeoutIndex = (displayTimeoutIndex + 1) % displayTimeoutCount;
-                Preferences preferences;
-                if (preferences.begin("orbit", false)) {
-                    preferences.putUChar("displayTimeout", displayTimeoutIndex);
-                    preferences.end();
-                }
-                drawSettings();
-            } else if (!bridgeReady && settingsItem == settingsHandsFree) {
-                toggleHotMic();
-                drawSettings();
-            } else if (!bridgeReady && settingsItem == settingsInterrupt) {
-                voiceInterruptBeta = !voiceInterruptBeta;
-                drawSettings();
-            }
-        }
+    if (chord != Chord::idle) {
+        if (chord == Chord::settingsShortcut) goBack();
+        chord = a.isPressed() || b.isPressed() ? Chord::consumed : Chord::idle;
         return;
     }
     if (a.wasPressed()) {
@@ -1406,17 +1449,7 @@ void updateButtons() {
             lastClickAt = now;
         }
     }
-    if (b.wasReleased() && !a.isPressed()) {
-        const bool goingHome = screen != Screen::home && !recording && mood != Mood::thinking &&
-                               b.wasReleaseFor(holdToHomeMs);
-        if (directTurn || playing || goingHome) {
-            cancelTurn();
-            showHome();
-        } else if (!recording && mood != Mood::thinking) {
-            if (!bridgeReady && !orbitLive::ready()) openPicker();
-            else if (!playReply()) show(Mood::idle, homePrompt());
-        }
-    }
+    if (b.wasReleased()) goBack();
 }
 
 void handleCommand(const String& command) {
@@ -1466,6 +1499,7 @@ void handleCommand(const String& command) {
         wifiPicker::close();
         settingsOpen = false;
         bridgeReady = true;
+        bridgeVoicePending = bridgeReplyDismissed = false;
         showHome();
         Serial.println("ORBIT READY");
     } else if (command == "BYE") {
@@ -1473,20 +1507,26 @@ void handleCommand(const String& command) {
         wifiPicker::close();
         settingsOpen = false;
         bridgeReady = false;
+        bridgeVoicePending = bridgeReplyDismissed = false;
         showHome();
     } else if (command == "THINK") {
+        bridgeReplyDismissed = false;
         if (recording) {
             stopRecording();
             Serial.println("ORBIT MIC SHORT");
         }
         show(Mood::thinking, "Waiting for the USB bridge...");
     } else if (command.startsWith("SAY ")) {
-        showReply(command.substring(4));
+        if (!bridgeReplyDismissed) showReply(command.substring(4));
+        if (!bridgeVoicePending) bridgeReplyDismissed = false;
         Serial.println("ORBIT SHOWN");
     } else if (command.startsWith("ERROR ")) {
-        show(Mood::error, command.substring(6));
+        if (!bridgeReplyDismissed) show(Mood::error, command.substring(6));
+        bridgeVoicePending = bridgeReplyDismissed = false;
     } else if (command.startsWith("PLAY ")) {
-        receiveReply(command.substring(5));
+        const bool dismissed = bridgeReplyDismissed;
+        bridgeVoicePending = bridgeReplyDismissed = false;
+        receiveReply(command.substring(5), dismissed);
     }
 }
 
@@ -1575,13 +1615,17 @@ void loop() {
     }
     serviceTimer();
     const bool tapped = updateTouch(!settingsOpen && !wifiPicker::active());
+    const bool inMenu = settingsOpen || wifiPicker::active() || bluetoothSetup::active();
+    const MenuAction action = inMenu && !menuClicked ? readMenuAction() : MenuAction::none;
+    if (menuClicked) consumeHeldButtons();
+    const bool back = menuClicked || action == MenuAction::back;
     if (bluetoothSetup::active()) {
-        if (!bluetoothSetup::update(M5.BtnB.wasPressed(), menuClicked)) drawSettings();
+        if (!bluetoothSetup::update(action == MenuAction::select, back)) drawSettings();
         delay(8);
         return;
     }
     if (wifiPicker::active()) {
-        if (!wifiPicker::update(M5.BtnA.wasPressed(), M5.BtnB.wasPressed(), menuClicked)) {
+        if (!wifiPicker::update(action == MenuAction::next, action == MenuAction::select, back)) {
             if (settingsOpen) drawSettings();
             else returnToReplyOrHome();
         }
@@ -1593,9 +1637,13 @@ void loop() {
         else openSettings();
         return;
     }
-    const bool wasInSettings = settingsOpen;
+    if (settingsOpen) {
+        updateSettings(action);
+        delay(8);
+        return;
+    }
     updateButtons();
-    if (settingsOpen || wasInSettings || wifiPicker::active()) {
+    if (settingsOpen) {
         delay(8);
         return;
     }

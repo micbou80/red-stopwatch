@@ -42,7 +42,7 @@ void draw() {
         display.setTextColor(TFT_WHITE, TFT_BLACK);
         display.drawString(serviceName, center, 325);
         display.drawString(String("Code: ") + pairingCode, center, 352);
-        display.drawString("Red: Cancel", center, 385);
+        display.drawString("B: Back", center, 385);
         return;
     }
     const char* message = page == Page::starting ? "Starting Bluetooth..." :
@@ -58,8 +58,7 @@ void draw() {
         display.drawString("Use USB setup to add the OpenAI key", center, 235);
     }
     display.setTextColor(TFT_CYAN, TFT_BLACK);
-    display.drawString(page == Page::error || page == Page::rejected ? "B: Retry     Red: Back" :
-                       page == Page::done ? "Red: Back" : "Red: Cancel", center, 355);
+    display.drawString(page == Page::error || page == Page::rejected ? "A+B: Retry     B: Back" : "B: Back", center, 355);
 }
 
 void onProvisionEvent(void*, wifi_prov_cb_event_t event, void*) {

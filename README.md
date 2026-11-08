@@ -29,11 +29,11 @@ python orbit.py --setup-watch
 ```
 
 1. Connect the watch over USB and close any running Red bridge before launching setup.
-2. The watch shows up to five visible 2.4 GHz networks, strongest first. Press **A** (left) to move and **B** (right) to select. In the terminal, press Enter to use that choice or type the network name directly.
+2. The watch shows up to five visible 2.4 GHz networks, strongest first. Press **A** (left) to move and press **A+B** together to select. In the terminal, press Enter to use that choice or type the network name directly.
 3. Enter the Wi-Fi password and OpenAI project API key at the hidden prompts. On subsequent setups, press Enter at the key prompt to keep the saved key.
 4. Wait for the connection check to pass. Unplug USB, hold **A** until **Listening** appears, speak, then release.
 
-Red scans automatically at first setup or after waiting about 12 seconds to join a saved network. You can also scan from Settings, or press **B** from home when Wi-Fi is unavailable. If the watch shows **Wi-Fi joined. Syncing clock**, it is setting its clock for the secure connection.
+Red scans automatically at first setup or after waiting about 12 seconds to join a saved network. You can also scan from Settings. If the watch shows **Wi-Fi joined. Syncing clock**, it is setting its clock for the secure connection.
 
 Use a dedicated project key for the watch. The API key and Wi-Fi password are stored in local device flash, where someone with physical access can read them. The setup script keeps these credentials out of the repository. Live features require internet access and use your OpenAI project. [GPT-Live model and pricing](https://developers.openai.com/api/docs/models/gpt-live-1)
 
@@ -41,11 +41,11 @@ Use a dedicated project key for the watch. The API key and Wi-Fi password are st
 
 Use Bluetooth setup to send a new Wi-Fi network to Red from a phone. Red keeps its saved OpenAI key. Use the USB setup above for the initial API key.
 
-1. Press the bottom red button to open Settings. Press **A** to highlight **Bluetooth setup**, then **B** to open it.
+1. Press the bottom red button to open Settings. Press **A** to highlight **Bluetooth setup**, then press **A+B** together to open it.
 2. Open **ESP BLE Provisioning** on the phone and scan the QR code on Red. For manual setup in the app, look for the `PROV_RED_…` device and enter the code shown on the watch. [iPhone and iPad](https://apps.apple.com/app/esp-ble-provisioning/id1473590141) · [Android](https://play.google.com/store/apps/details?id=com.espressif.provble)
-3. Choose a 2.4 GHz Wi-Fi network in the app and enter its password. Wait for **Wi-Fi saved** on Red, then press the bottom red button to return to Settings.
+3. Choose a 2.4 GHz Wi-Fi network in the app and enter its password. Wait for **Wi-Fi saved** on Red, then press **B** to return to Settings.
 
-Pairing uses a fresh code and closes after two minutes. You can cancel with the bottom red button. If the network fails to join, use **B** to retry. Red saves the new network after a successful connection and restores the previous network on cancel or timeout. [Espressif’s BLE provisioning guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.8/esp32s3/api-reference/provisioning/wifi_provisioning.html)
+Pairing uses a fresh code and closes after two minutes. Press **B** to cancel. If the network fails to join, press **A+B** to retry. Red saves the new network after a successful connection and restores the previous network on cancel or timeout. [Espressif’s BLE provisioning guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.8/esp32s3/api-reference/provisioning/wifi_provisioning.html)
 
 ## Controls
 
@@ -53,10 +53,9 @@ Pairing uses a fresh code and closes after two minutes. You can cancel with the 
 | --- | --- |
 | Hold **A**, then release | Ask one question. Hold **A** again while Red is speaking to interrupt and ask another. |
 | Double-click **A** | Toggle hands-free mode in standalone use. |
-| Press **B** | Stop a spoken reply, or replay the most recent reply audio when idle. |
-| Hold **B** | Return to the avatar from a finished reply or timer. A running timer continues counting. |
-| Press the bottom red button | Open or close Settings, or go back from the Wi-Fi picker. Hold **A** and **B** together as another way to open Settings. |
-| **A** / **B** in Settings | Move to the next option / select it. Volume cycles through 25%, 50%, 75%, and 100%. |
+| Press **B** | Go back one screen. From a question, reply, timer, or camera view, return to the avatar. A running timer continues counting. |
+| Press the bottom red button | Open or close Settings, or go back in a setup screen. From outside a menu, hold **A+B** to open Settings. |
+| Menus | Press **A** for Next, **B** for Back, and **A+B** together to Select. Volume cycles through 25%, 50%, 75%, and 100%. |
 | **Display** in Settings | Cycle through 30 seconds (default), 1 minute, 5 minutes, and Never. The watch saves your choice. Pick up Red, touch the screen, or press a button to wake it. Voice activity and timer alerts also wake the display. |
 | Tap or swipe | Tap the home screen to make Red bounce. Swipe up or down on a long reply to read more. |
 
@@ -84,7 +83,7 @@ python orbit.py --setup-hass
 
 Setup checks the remote MCP tool list and saves the supported tools to Red. Try “Is the living room lamp on?” or “Turn off the living room lamp” with the name used in Home Assistant. Red uses this integration in standalone voice mode from any internet-connected Wi-Fi network.
 
-For a camera, expose it to **Assist** and ask “Show the garden camera.” Red resolves the camera by name or area through the same Device control MCP endpoint. It fetches a still image from Home Assistant over HTTPS and displays it locally. The image stays on the watch. Hold B to return home.
+For a camera, expose it to **Assist** and ask “Show the garden camera.” Red resolves the camera by name or area through the same Device control MCP endpoint. It fetches a still image from Home Assistant over HTTPS and displays it locally. The image stays on the watch. Press **B** to return home.
 
 The watch stores the endpoint and token in local flash. GPT-Live passes the token to OpenAI’s Responses backend to authenticate the MCP calls. Remove the saved settings with `python orbit.py --clear-hass` and revoke the token in Home Assistant if you no longer need it. [GPT-Live MCP tool docs](https://developers.openai.com/api/docs/guides/live-delegation#add-mcp-and-other-tools)
 

@@ -119,7 +119,7 @@ def setup_watch(port):
     print("Device flash is readable by someone with physical access.")
     with serial.Serial(port, 115200, timeout=0.2, write_timeout=2) as watch:
         watch.write(b"WIFI SCAN\n")
-        print("On the watch, press Left to move and Right to select your network.")
+        print("On the watch, press A to move and A+B to select your network.")
         while True:
             ssid = input("Press Enter to use the watch selection, or type a 2.4 GHz network name: ")
             if ssid:
@@ -286,7 +286,7 @@ def run(watch, key, demo, smoke_test):
         "Offline mic loopback and canned text replies." if demo
         else f"AI-generated voice with {VOICE_MODEL}. Typed questions use {MODEL}."
     ))
-    print("Hold A until Listening appears, then speak and release. Press B to replay.")
+    print("Hold A until Listening appears, then speak and release. Press B to go back.")
     print("Type a question and press Enter, or type /quit.")
     questions = queue.Queue()
     threading.Thread(target=read_questions, args=(questions,), daemon=True).start()

@@ -49,6 +49,7 @@ void draw() {
 
     if (page == Page::preparing) {
         display.drawString("Scanning for Wi-Fi...", center, 217);
+        display.drawString("B: Back", center, 348);
         return;
     }
     if (page == Page::selected) {
@@ -57,12 +58,12 @@ void draw() {
         display.drawString(displayName(chosen, 336), center, 191);
         display.setFont(uiFont::label());
         display.drawString("Continue in the Windows setup window", center, 235);
-        display.drawString("A: Change network     Red: Back", center, 348);
+        display.drawString("B: Back to networks", center, 348);
         return;
     }
     if (!count) {
         display.drawString(scanFailed ? "Wi-Fi scan failed" : "No visible Wi-Fi networks", center, 217);
-        display.drawString("A: Scan again     B: Back", center, 348);
+        display.drawString("A+B: Scan again     B: Back", center, 348);
         return;
     }
     for (int row = 0; row < count; ++row) {
@@ -78,7 +79,7 @@ void draw() {
     display.setTextDatum(top_center);
     display.setTextColor(TFT_CYAN, TFT_BLACK);
     display.drawString("2.4 GHz  /  strongest first", center, 319);
-    display.drawString("A: Next     B: Select     Red: Back", center, 348);
+    display.drawString("A: Next     B: Back     A+B: Select", center, 348);
 }
 
 void insert(const String& ssid, int32_t signal) {
@@ -190,6 +191,12 @@ void redraw() { draw(); }
 
 bool update(bool next, bool select, bool back) {
     if (back) {
+        if (page == Page::selected) {
+            chosen = "";
+            page = Page::results;
+            draw();
+            return true;
+        }
         close();
         return false;
     }
@@ -203,17 +210,9 @@ bool update(bool next, bool select, bool back) {
             cursor = (cursor + 1) % count;
         }
         draw();
-    } else if (page == Page::selected && next) {
-        page = Page::results;
-        draw();
-    } else if (page == Page::results && !count) {
-        if (next) {
-            close();
-            open(configured);
-        } else if (select) {
-            close();
-            return false;
-        }
+    } else if (page == Page::results && !count && select) {
+        close();
+        open(configured);
     }
     return true;
 }
