@@ -30,7 +30,7 @@ void closeAsync();
 bool closing();
 bool waitingForBackend();
 bool timerViewRequested();
-std::unique_ptr<redCamera::Snapshot> takeCameraSnapshot();
+std::unique_ptr<redCamera::View> takeCameraView();
 String caption();
 String inputCaption();
 void rememberTurn(String answer);

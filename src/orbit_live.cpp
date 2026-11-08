@@ -57,7 +57,7 @@ constexpr char audioPrefix[] = "{\"type\":\"session.input_audio.append\",\"audio
 constexpr char cameraTool[] = R"JSON({
   "type": "function",
   "name": "show_home_camera",
-  "description": "Fetch and show a still snapshot of one Home Assistant camera on the watch. Resolves the camera through Home Assistant using a name or area.",
+  "description": "Open the live view of one Home Assistant camera on the watch. Resolves the camera through Home Assistant using a name or area.",
   "strict": true,
   "parameters": {
     "type": "object",
@@ -97,7 +97,7 @@ String lastWatchCallId;
 std::atomic<bool> watchCallReady{false};
 std::atomic<bool> watchContinuing{false};
 std::atomic<bool> watchHandled{false};
-std::atomic<redCamera::Snapshot*> cameraSnapshot{nullptr};
+std::atomic<redCamera::View*> cameraView{nullptr};
 std::atomic<bool> showCountdown{false};
 std::atomic<size_t> received{0};
 std::atomic<bool> bufferFull{false};
@@ -433,17 +433,17 @@ bool sendTimerResult(const WatchCall& call) {
 bool sendCameraResult(const WatchCall& call) {
     StaticJsonDocument<1536> home;
     const char* status = "home_assistant_camera_lookup_unavailable";
-    if (cameraSnapshot.load()) {
-        status = "snapshot_already_fetched";
+    if (cameraView.load()) {
+        status = "camera_already_opening";
     } else if (homeAssistantAttached && homeAssistantConfig(home, homeAssistantSettings)) {
         const auto config = home.as<JsonObjectConst>();
         const char* stateTool = homeTool(config, "HassGetState");
         const char* lookupTool = stateTool ? stateTool : homeTool(config, "GetLiveContext");
         if (lookupTool) {
-            std::unique_ptr<redCamera::Snapshot> snapshot(new (std::nothrow) redCamera::Snapshot);
-            status = snapshot ? redCamera::fetch(home["url"], home["token"], lookupTool, stateTool != nullptr,
-                                                 call.name, call.area, *snapshot) : "out_of_memory";
-            if (!strcmp(status, "ok") && !closePending) cameraSnapshot = snapshot.release();
+            std::unique_ptr<redCamera::View> view(new (std::nothrow) redCamera::View);
+            status = view ? redCamera::fetch(home["url"], home["token"], lookupTool, stateTool != nullptr,
+                                             call.name, call.area, *view) : "out_of_memory";
+            if (!strcmp(status, "ok") && !closePending) cameraView = view.release();
         }
     }
     Serial.printf("ORBIT CAMERA %s\n", status);
@@ -494,14 +494,14 @@ bool sendSessionStart() {
             StaticJsonDocument<1024> camera;
             if (deserializeJson(camera, cameraTool) || !tools.add(camera.as<JsonObjectConst>())) return false;
             voice += " Always generate <|SpawnThinking|> when asked to show or open a home camera. "
-                     "The backend can fetch a camera snapshot for the watch. Wait for its result before "
-                     "saying whether a camera was found or a picture was fetched.";
+                     "The backend can open a live camera view on the watch. Wait for its result before "
+                     "saying whether a camera was found or opened.";
             backend += " For an explicit request to show a camera, call show_home_camera with its name or "
                        "area, using one field at a time unless both are needed to disambiguate. "
                        "If lookup fails, use Home Assistant live context filtered to the camera domain to find the exact exposed camera name "
                        "or area, including translations, and retry only with a different plausible match. "
-                       "Ask the user to choose if several cameras match. Say a still snapshot was fetched "
-                       "only on success. If no exposed camera matches, say so and mention exposure to Assist.";
+                       "Ask the user to choose if several cameras match. On success, briefly say you are opening "
+                       "the camera. If no exposed camera matches, say so and mention exposure to Assist.";
         }
         session["instructions"] = voice;
         responses["instructions"] = backend;
@@ -642,8 +642,8 @@ bool waitingForBackend() {
     return backendPending || watchCallReady || watchContinuing || (ended && millis() - ended < 3500);
 }
 bool timerViewRequested() { return showCountdown; }
-std::unique_ptr<redCamera::Snapshot> takeCameraSnapshot() {
-    return std::unique_ptr<redCamera::Snapshot>(cameraSnapshot.exchange(nullptr));
+std::unique_ptr<redCamera::View> takeCameraView() {
+    return std::unique_ptr<redCamera::View>(cameraView.exchange(nullptr));
 }
 size_t available() { return received.load(); }
 bool hasSpokenOutput() { return spokenOutput.load(); }
@@ -664,7 +664,7 @@ bool start(int16_t* output, size_t capacity) {
     watchCallReady = false;
     watchContinuing = false;
     watchHandled = false;
-    takeCameraSnapshot();
+    takeCameraView();
     showCountdown = false;
     received = 0;
     bufferFull = false;

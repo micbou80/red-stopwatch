@@ -1,6 +1,7 @@
 #include "red_camera.h"
 
 #include <ArduinoJson.h>
+#include <atomic>
 #include <esp_http_client.h>
 
 // Arduino's WiFiClientSecure header shadows the ESP-IDF header of the same name.
@@ -8,6 +9,23 @@ extern "C" esp_err_t esp_crt_bundle_attach(void* config);
 
 namespace redCamera {
 namespace {
+constexpr size_t snapshotCapacity = 384 * 1024;
+constexpr size_t maxStreamFrame = 1024 * 1024;
+
+esp_http_client_config_t clientConfig(const char* url, int timeout) {
+    esp_http_client_config_t config{};
+    config.url = url;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.disable_auto_redirect = true;
+    config.timeout_ms = timeout;
+    return config;
+}
+
+void authorize(esp_http_client_handle_t client, const char* token) {
+    const String authorization = String("Bearer ") + token;
+    esp_http_client_set_header(client, "Authorization", authorization.c_str());
+}
+
 struct Body {
     Body(uint8_t* data, size_t capacity) : data(data), capacity(capacity) {}
 
@@ -29,19 +47,15 @@ esp_err_t receive(esp_http_client_event_t* event) {
     return ESP_OK;
 }
 
-int request(const char* url, const char* token, Body& body, const String* payload = nullptr) {
-    esp_http_client_config_t config{};
-    config.url = url;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-    config.disable_auto_redirect = true;
-    config.timeout_ms = 10000;
+int request(const char* url, const char* token, Body& body, const String* payload = nullptr,
+            int timeout = 10000) {
+    auto config = clientConfig(url, timeout);
     config.event_handler = receive;
     config.user_data = &body;
     config.method = payload ? HTTP_METHOD_POST : HTTP_METHOD_GET;
     auto client = esp_http_client_init(&config);
     if (!client) return 0;
-    const String authorization = String("Bearer ") + token;
-    esp_http_client_set_header(client, "Authorization", authorization.c_str());
+    authorize(client, token);
     if (payload) {
         esp_http_client_set_header(client, "Accept", "application/json");
         esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -95,6 +109,159 @@ bool readDimensions(Snapshot& snapshot) {
         offset += length;
     }
     return false;
+}
+
+const char* fetchSnapshot(const Source& source, Snapshot& snapshot, int timeout, bool logStatus) {
+    snapshot.data = static_cast<uint8_t*>(ps_malloc(snapshotCapacity));
+    if (!snapshot.data) return "out_of_memory";
+    Body body{snapshot.data, snapshotCapacity};
+    const int status = request(source.imageUrl.c_str(), source.token.c_str(), body, nullptr, timeout);
+    if (logStatus) Serial.printf("ORBIT CAMERA IMAGE HTTP %d\n", status);
+    if (status == 401 || status == 403) return "home_assistant_access_denied";
+    if (status == 413) return "snapshot_too_large";
+    if (status != 200 || !body.size) return "snapshot_unavailable";
+    snapshot.size = body.size;
+    return readDimensions(snapshot) ? "ok" : "unsupported_snapshot_format";
+}
+
+struct Feed {
+    explicit Feed(const Source& source) : source(source) {}
+    ~Feed() { delete latest.load(); }
+
+    void publish(std::unique_ptr<Snapshot> frame) {
+        delete latest.exchange(frame.release());
+        unavailable = false;
+    }
+
+    const Source source;
+    std::atomic<bool> stopped{false};
+    std::atomic<bool> snapshotsOnly{false};
+    std::atomic<bool> unavailable{false};
+    std::atomic<Snapshot*> latest{nullptr};
+};
+
+std::shared_ptr<Feed> activeFeed;
+std::atomic<bool> feedRunning{false};
+
+class StreamReader {
+public:
+    StreamReader(esp_http_client_handle_t client, const std::atomic<bool>& stopped)
+        : client(client), stopped(stopped) {}
+
+    bool read(uint8_t* destination, size_t size) {
+        while (size && !stopped) {
+            if (offset == available && !refill()) return false;
+            const size_t count = min(size, available - offset);
+            memcpy(destination, buffer + offset, count);
+            offset += count;
+            destination += count;
+            size -= count;
+        }
+        return size == 0;
+    }
+
+    size_t nextFrameSize() {
+        char header[256];
+        if (!readLine(header, sizeof(header))) return 0;
+        if (!*header && !readLine(header, sizeof(header))) return 0;
+        if (strcmp(header, "--frameboundary")) return 0;
+        size_t size = 0;
+        for (int lines = 0; lines < 12 && readLine(header, sizeof(header)); ++lines) {
+            if (!*header) return size;
+            constexpr char lengthHeader[] = "Content-Length:";
+            if (strncasecmp(header, lengthHeader, sizeof(lengthHeader) - 1)) continue;
+            char* end;
+            const char* value = header + sizeof(lengthHeader) - 1;
+            const unsigned long length = strtoul(value, &end, 10);
+            if (end == value || *end || !length || length > maxStreamFrame || size) return 0;
+            size = length;
+        }
+        return 0;
+    }
+
+private:
+    bool refill() {
+        const unsigned long started = millis();
+        while (!stopped && millis() - started < 12000) {
+            const int count = esp_http_client_read(client, reinterpret_cast<char*>(buffer), sizeof(buffer));
+            if (count > 0) {
+                offset = 0;
+                available = count;
+                return true;
+            }
+            if (count < 0 || esp_http_client_is_complete_data_received(client)) return false;
+            vTaskDelay(1);
+        }
+        return false;
+    }
+
+    bool readLine(char* line, size_t capacity) {
+        for (size_t i = 0; i + 1 < capacity; ++i) {
+            uint8_t ch;
+            if (!read(&ch, 1)) return false;
+            if (ch == '\n') {
+                line[i && line[i - 1] == '\r' ? i - 1 : i] = '\0';
+                return true;
+            }
+            line[i] = ch;
+        }
+        return false;
+    }
+
+    esp_http_client_handle_t client;
+    const std::atomic<bool>& stopped;
+    uint8_t buffer[1024];
+    size_t offset = 0;
+    size_t available = 0;
+};
+
+void receiveStream(Feed& feed, esp_http_client_handle_t client) {
+    StreamReader reader(client, feed.stopped);
+    bool first = true;
+    while (!feed.stopped && !feed.snapshotsOnly) {
+        const size_t size = reader.nextFrameSize();
+        if (!size) return;
+        std::unique_ptr<Snapshot> frame(new (std::nothrow) Snapshot);
+        if (!frame) return;
+        frame->data = static_cast<uint8_t*>(ps_malloc(size));
+        if (!frame->data || !reader.read(frame->data, size) || feed.stopped) return;
+        frame->size = size;
+        if (!readDimensions(*frame)) return;
+        feed.publish(std::move(frame));
+        if (first) {
+            first = false;
+            Serial.println("ORBIT CAMERA STREAM FRAME");
+        }
+    }
+}
+
+void runFeed(Feed& feed) {
+    auto config = clientConfig(feed.source.streamUrl.c_str(), 5000);
+    if (auto client = esp_http_client_init(&config)) {
+        authorize(client, feed.source.token.c_str());
+        if (!feed.stopped && esp_http_client_open(client, 0) == ESP_OK &&
+            esp_http_client_fetch_headers(client) >= 0) {
+            const int status = esp_http_client_get_status_code(client);
+            Serial.printf("ORBIT CAMERA STREAM HTTP %d\n", status);
+            if (status == 200) {
+                esp_http_client_set_timeout_ms(client, 400);
+                receiveStream(feed, client);
+            }
+        }
+        esp_http_client_cleanup(client);
+    }
+    if (feed.stopped) return;
+    Serial.println("ORBIT CAMERA STREAM REFRESHING");
+    while (!feed.stopped) {
+        const unsigned long started = millis();
+        std::unique_ptr<Snapshot> frame(new (std::nothrow) Snapshot);
+        const bool loaded = frame && !strcmp(fetchSnapshot(feed.source, *frame, 5000, false), "ok");
+        if (feed.stopped) return;
+        if (loaded) feed.publish(std::move(frame));
+        else feed.unavailable = true;
+        while (!feed.stopped && millis() - started < 1000) vTaskDelay(pdMS_TO_TICKS(50));
+        if (!loaded && !feed.stopped) vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 const char* resolve(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,
@@ -181,7 +348,7 @@ const char* resolve(const char* endpoint, const char* token, const char* lookupT
 }
 
 const char* fetch(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,
-                  const char* name, const char* area, Snapshot& snapshot) {
+                  const char* name, const char* area, View& view) {
     if (!*name && !*area) return "camera_name_or_area_required";
     String url(endpoint);
     url.remove(url.length() - strlen("/api/mcp/assist"));
@@ -189,20 +356,46 @@ const char* fetch(const char* endpoint, const char* token, const char* lookupToo
     const char* lookup = resolve(endpoint, token, lookupTool, returnsIds, name, area, url, entity);
     if (strcmp(lookup, "ok")) return lookup;
 
-    url += "/api/camera_proxy/";
-    url += entity;
-    url += "?width=800&height=800";
-    constexpr size_t capacity = 384 * 1024;
-    snapshot.data = static_cast<uint8_t*>(ps_malloc(capacity));
-    if (!snapshot.data) return "out_of_memory";
-    Body body{snapshot.data, capacity};
-    const int status = request(url.c_str(), token, body);
-    Serial.printf("ORBIT CAMERA IMAGE HTTP %d\n", status);
-    if (status == 401 || status == 403) return "home_assistant_access_denied";
-    if (status == 413) return "snapshot_too_large";
-    if (status != 200 || !body.size) return "snapshot_unavailable";
-    snapshot.size = body.size;
-    if (!readDimensions(snapshot)) return "unsupported_snapshot_format";
-    return "ok";
+    view.source = {url + "/api/camera_proxy/" + entity + "?width=800&height=800",
+                   url + "/api/camera_proxy_stream/" + entity + "?interval=1", token};
+    view.firstFrame.reset(new (std::nothrow) Snapshot);
+    return view.firstFrame ? fetchSnapshot(view.source, *view.firstFrame, 10000, true) : "out_of_memory";
+}
+
+void start(const Source& source) {
+    if (activeFeed || feedRunning) return;
+    auto feed = std::make_shared<Feed>(source);
+    auto* task = new (std::nothrow) std::shared_ptr<Feed>(feed);
+    activeFeed = feed;
+    feedRunning = true;
+    if (task && xTaskCreate([](void* context) {
+            std::unique_ptr<std::shared_ptr<Feed>> task(static_cast<std::shared_ptr<Feed>*>(context));
+            runFeed(**task);
+            task.reset();
+            Serial.println("ORBIT CAMERA STREAM CLOSED");
+            feedRunning = false;
+            vTaskDelete(nullptr);
+        }, "red-camera", 7168, task, 1, nullptr) == pdPASS) return;
+    delete task;
+    feedRunning = false;
+    feed->unavailable = true;
+}
+
+void stop() {
+    if (!activeFeed) return;
+    activeFeed->stopped = true;
+    activeFeed.reset();
+}
+
+void useSnapshots() {
+    if (activeFeed) activeFeed->snapshotsOnly = true;
+}
+
+std::unique_ptr<Snapshot> takeFrame() {
+    return std::unique_ptr<Snapshot>(activeFeed ? activeFeed->latest.exchange(nullptr) : nullptr);
+}
+
+bool unavailable() {
+    return activeFeed && activeFeed->unavailable;
 }
 }

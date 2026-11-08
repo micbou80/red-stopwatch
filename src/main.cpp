@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.3.3";
+constexpr char firmwareVersion[] = "FW 0.3.4";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -77,7 +77,11 @@ Mood mood = Mood::idle;
 Screen screen = Screen::home;
 M5Canvas flower(&M5.Display);
 M5Canvas conversation(&M5.Display);
+M5Canvas cameraCanvas(&M5.Display);
+redCamera::Source cameraSource;
 std::unique_ptr<redCamera::Snapshot> displayedCamera;
+bool cameraUnavailable = false;
+unsigned cameraLiveFrames = 0;
 bool flowerReady = false;
 unsigned long avatarBounceAt = 0;
 int avatarLift = 0;
@@ -175,9 +179,19 @@ bool timerChimePending = false;
 void drawStatus();
 void wakeDisplay();
 
+void closeCamera() {
+    redCamera::stop();
+    Serial.printf("ORBIT CAMERA LIVE FRAMES %u\n", cameraLiveFrames);
+    cameraLiveFrames = 0;
+    cameraCanvas.deleteSprite();
+    displayedCamera.reset();
+    cameraSource = {};
+    cameraUnavailable = false;
+}
+
 void enterScreen(Screen next) {
     if (screen == next) return;
-    if (screen == Screen::camera) displayedCamera.reset();
+    if (screen == Screen::camera) closeCamera();
     screen = next;
     M5.Display.fillScreen(TFT_BLACK);
     drawStatus();
@@ -360,7 +374,7 @@ void show(Mood state, const String& message) {
     replyStreaming = false;
     scrollTouch = false;
     if (mood == Mood::idle) {
-        displayedCamera.reset();
+        if (screen == Screen::camera) closeCamera();
         screen = Screen::home;
         drawHome(message);
     } else {
@@ -455,25 +469,41 @@ void showTimer() {
 }
 
 bool drawCamera(const redCamera::Snapshot& snapshot) {
-    auto& display = M5.Display;
-    const int width = display.width();
-    const int height = display.height();
+    const int width = M5.Display.width();
+    const int height = M5.Display.height();
+    if (!cameraCanvas.width()) {
+        cameraCanvas.setPsram(true);
+        cameraCanvas.setColorDepth(16);
+        if (!cameraCanvas.createSprite(width, height)) return false;
+    }
     const float scale = max(static_cast<float>(width) / snapshot.width,
                             static_cast<float>(height) / snapshot.height);
-    display.fillScreen(TFT_BLACK);
-    if (snapshot.data[0] == 0xff) {
-        return display.drawJpg(snapshot.data, snapshot.size, 0, 0, width, height,
+    cameraCanvas.fillScreen(TFT_BLACK);
+    const bool drawn = snapshot.data[0] == 0xff
+        ? cameraCanvas.drawJpg(snapshot.data, snapshot.size, 0, 0, width, height,
+                               0, 0, scale, scale, middle_center)
+        : cameraCanvas.drawPng(snapshot.data, snapshot.size, 0, 0, width, height,
                                0, 0, scale, scale, middle_center);
+    if (!drawn) return false;
+    if (cameraUnavailable) {
+        constexpr int labelWidth = 124;
+        const int y = height - 42;
+        cameraCanvas.fillRoundRect((width - labelWidth) / 2, y, labelWidth, 24, 8, TFT_BLACK);
+        cameraCanvas.setTextDatum(middle_center);
+        cameraCanvas.setTextSize(1);
+        cameraCanvas.setFont(uiFont::label());
+        cameraCanvas.setTextColor(TFT_WHITE);
+        cameraCanvas.drawString("Reconnecting...", width / 2, y + 12);
     }
-    return display.drawPng(snapshot.data, snapshot.size, 0, 0, width, height,
-                           0, 0, scale, scale, middle_center);
+    cameraCanvas.pushSprite(0, 0);
+    return true;
 }
 
 bool showCamera() {
-    auto snapshot = orbitLive::takeCameraSnapshot();
-    if (!snapshot) return false;
+    auto view = orbitLive::takeCameraView();
+    if (!view) return false;
     enterScreen(Screen::camera);
-    if (!drawCamera(*snapshot)) {
+    if (!drawCamera(*view->firstFrame)) {
         Serial.println("ORBIT CAMERA DECODE FAILED");
         show(Mood::error, "Could not display the camera image.");
         return true;
@@ -482,9 +512,28 @@ bool showCamera() {
     replyLines.clear();
     replyStreaming = false;
     scrollTouch = false;
-    displayedCamera = std::move(snapshot);
+    displayedCamera = std::move(view->firstFrame);
+    cameraSource = std::move(view->source);
     Serial.println("ORBIT CAMERA DISPLAYED");
     return true;
+}
+
+void serviceCamera() {
+    if (screen != Screen::camera || displaySleeping || !displayedCamera) return;
+    redCamera::start(cameraSource);
+    const bool unavailable = redCamera::unavailable();
+    const bool statusChanged = unavailable != cameraUnavailable;
+    cameraUnavailable = unavailable;
+    if (auto frame = redCamera::takeFrame()) {
+        if (drawCamera(*frame)) {
+            displayedCamera = std::move(frame);
+            if (++cameraLiveFrames == 2) Serial.println("ORBIT CAMERA LIVE UPDATING");
+        } else {
+            redCamera::useSnapshots();
+        }
+    } else if (statusChanged) {
+        drawCamera(*displayedCamera);
+    }
 }
 
 void drawStatus() {
@@ -1295,6 +1344,7 @@ void updateDisplayTimeout(bool menuClicked) {
         lastMotionSample = now - motionSampleMs;
         M5.Display.sleep();
         displaySleeping = true;
+        if (screen == Screen::camera) redCamera::stop();
         Serial.println("ORBIT DISPLAY SLEEP");
     }
 }
@@ -1308,6 +1358,7 @@ void consumeHeldButtons() {
 void openSettings() {
     consumeHeldButtons();
     cancelTurn();
+    redCamera::stop();
     stopMic();
     duplexAudio::end();
     settingsOpen = true;
@@ -1655,6 +1706,7 @@ void loop() {
     serviceDirect();
     updateReplyCaption();
     updateInputCaption();
+    serviceCamera();
     const unsigned long now = millis();
     updateStandby(now);
     if (micRunning() && !recording && (bridgeReady || !orbitLive::ready()) && !playing) {
