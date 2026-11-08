@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.3.4";
+constexpr char firmwareVersion[] = "FW 0.3.5";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -38,6 +38,8 @@ constexpr size_t speakerPreroll = sampleRate * 80 / 1000;
 constexpr unsigned long holdToTalkMs = 180;
 constexpr unsigned long doubleClickMs = 380;
 constexpr unsigned long settingsHoldMs = 750;
+constexpr int backButtonPin = 1;  // StopWatch KEYB, active low.
+constexpr TickType_t backDebounceTicks = pdMS_TO_TICKS(8);
 constexpr unsigned long micWarmupMs = 350;
 constexpr unsigned long firstMicWarmupMs = 1100;
 constexpr unsigned long speakerHandoffQuietMs = 500;
@@ -82,6 +84,10 @@ redCamera::Source cameraSource;
 std::unique_ptr<redCamera::Snapshot> displayedCamera;
 bool cameraUnavailable = false;
 unsigned cameraLiveFrames = 0;
+portMUX_TYPE backButtonLock = portMUX_INITIALIZER_UNLOCKED;
+volatile TickType_t backButtonDownAt = 0;
+volatile bool backButtonDown = false;
+volatile bool backButtonReleased = false;
 bool flowerReady = false;
 unsigned long avatarBounceAt = 0;
 int avatarLift = 0;
@@ -178,6 +184,28 @@ bool timerChimePending = false;
 
 void drawStatus();
 void wakeDisplay();
+
+// Latch taps that start and end while the UI loop is decoding or pushing a camera frame.
+void ARDUINO_ISR_ATTR captureBackEdge() {
+    const bool pressed = digitalRead(backButtonPin) == LOW;
+    const TickType_t now = xTaskGetTickCountFromISR();
+    portENTER_CRITICAL_ISR(&backButtonLock);
+    if (pressed) {
+        backButtonDownAt = now;
+    } else if (backButtonDown && now - backButtonDownAt >= backDebounceTicks) {
+        backButtonReleased = true;
+    }
+    backButtonDown = pressed;
+    portEXIT_CRITICAL_ISR(&backButtonLock);
+}
+
+bool takeBackRelease() {
+    portENTER_CRITICAL(&backButtonLock);
+    const bool released = backButtonReleased;
+    backButtonReleased = false;
+    portEXIT_CRITICAL(&backButtonLock);
+    return released;
+}
 
 void closeCamera() {
     redCamera::stop();
@@ -520,14 +548,16 @@ bool showCamera() {
 
 void serviceCamera() {
     if (screen != Screen::camera || displaySleeping || !displayedCamera) return;
+    if (M5.BtnA.isPressed() || digitalRead(backButtonPin) == LOW) return;
     redCamera::start(cameraSource);
     const bool unavailable = redCamera::unavailable();
     const bool statusChanged = unavailable != cameraUnavailable;
     cameraUnavailable = unavailable;
     if (auto frame = redCamera::takeFrame()) {
+        const unsigned long started = millis();
         if (drawCamera(*frame)) {
             displayedCamera = std::move(frame);
-            if (++cameraLiveFrames == 2) Serial.println("ORBIT CAMERA LIVE UPDATING");
+            if (++cameraLiveFrames == 2) Serial.printf("ORBIT CAMERA LIVE UPDATING draw %lu ms\n", millis() - started);
         } else {
             redCamera::useSnapshots();
         }
@@ -1462,11 +1492,12 @@ void updateSettings(MenuAction action) {
 void goBack() {
     lastClickAt = 0;
     if (screen == Screen::home && !recording && !directTurn && !playing) return;
+    if (screen == Screen::camera) Serial.println("ORBIT CAMERA BACK");
     cancelTurn();
     showHome();
 }
 
-void updateButtons() {
+void updateButtons(bool cameraBack) {
     const auto& a = M5.BtnA;
     const auto& b = M5.BtnB;
     if (a.isPressed() && b.isPressed()) {
@@ -1504,7 +1535,7 @@ void updateButtons() {
             lastClickAt = now;
         }
     }
-    if (b.wasReleased()) goBack();
+    if (b.wasReleased() || cameraBack) goBack();
 }
 
 void handleCommand(const String& command) {
@@ -1612,6 +1643,7 @@ void setup() {
         Serial.println("ORBIT ERROR Expected StopWatch display");
         return;
     }
+    attachInterrupt(backButtonPin, captureBackEdge, CHANGE);
     center = M5.Display.width() / 2;
     menuButtonReady = configureMenuButton();
     Serial.println(menuButtonReady ? "ORBIT MENU BUTTON READY" : "ORBIT MENU BUTTON UNAVAILABLE");
@@ -1659,6 +1691,7 @@ void loop() {
         return;
     }
     M5.update();
+    const bool backReleased = takeBackRelease();
     const bool menuClicked = pollMenuButton();
     updateDisplayTimeout(menuClicked);
     readSerial();
@@ -1697,7 +1730,7 @@ void loop() {
         delay(8);
         return;
     }
-    updateButtons();
+    updateButtons(screen == Screen::camera && backReleased);
     if (settingsOpen) {
         delay(8);
         return;
