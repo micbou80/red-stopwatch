@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.2.1";
+constexpr char firmwareVersion[] = "FW 0.2.2";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -69,6 +69,9 @@ constexpr DisplayTimeout displayTimeouts[] = {
     {"30 seconds", 30000}, {"1 minute", 60000}, {"5 minutes", 300000}, {"Never", 0}
 };
 constexpr uint8_t displayTimeoutCount = sizeof(displayTimeouts) / sizeof(displayTimeouts[0]);
+constexpr unsigned long motionSampleMs = 25;
+constexpr float pickupAccelG = 0.14f;
+constexpr float pickupGyroDps = 25.0f;
 Mood mood = Mood::idle;
 Screen screen = Screen::home;
 M5Canvas flower(&M5.Display);
@@ -153,6 +156,10 @@ uint8_t speakerVolume = 100;
 uint8_t displayTimeoutIndex = 0;
 unsigned long displayActivityAt = 0;
 bool displaySleeping = false;
+unsigned long lastMotionSample = 0;
+m5::IMU_Class::imu_3d_t restingAccel{};
+bool restingAccelReady = false;
+uint8_t pickupSamples = 0;
 bool menuButtonReady = false;
 int batteryPercent = -1;
 bool batteryCharging = false;
@@ -1186,6 +1193,29 @@ void wakeDisplay() {
     Serial.println("ORBIT DISPLAY WAKE");
 }
 
+bool pickedUp(unsigned long now) {
+    if (!M5.Imu.isEnabled() || now - lastMotionSample < motionSampleMs) return false;
+    lastMotionSample = now;
+    const auto sensors = M5.Imu.update();
+    if (!(sensors & m5::IMU_Class::sensor_mask_accel)) return false;
+    const auto& data = M5.Imu.getImuData();
+    if (!restingAccelReady) {
+        restingAccel = data.accel;
+        restingAccelReady = true;
+        return false;
+    }
+    const float dx = data.accel.x - restingAccel.x;
+    const float dy = data.accel.y - restingAccel.y;
+    const float dz = data.accel.z - restingAccel.z;
+    const auto& gyro = data.gyro;
+    const bool turning = (sensors & m5::IMU_Class::sensor_mask_gyro) &&
+                         gyro.x * gyro.x + gyro.y * gyro.y + gyro.z * gyro.z >= pickupGyroDps * pickupGyroDps;
+    const bool moving = dx * dx + dy * dy + dz * dz >= pickupAccelG * pickupAccelG;
+    // A single spike can come from a bump to the table.
+    pickupSamples = moving || turning ? pickupSamples + 1 : 0;
+    return pickupSamples >= 2;
+}
+
 void updateDisplayTimeout(bool menuClicked) {
     const bool touching = M5.Touch.getCount() && M5.Touch.getDetail().isPressed();
     if (touching || menuClicked || M5.BtnA.isPressed() || M5.BtnB.isPressed() ||
@@ -1193,8 +1223,19 @@ void updateDisplayTimeout(bool menuClicked) {
         wakeDisplay();
         return;
     }
+    const unsigned long now = millis();
+    if (displaySleeping) {
+        if (pickedUp(now)) {
+            Serial.println("ORBIT DISPLAY MOTION");
+            wakeDisplay();
+        }
+        return;
+    }
     const unsigned long timeout = displayTimeouts[displayTimeoutIndex].durationMs;
-    if (!displaySleeping && timeout && millis() - displayActivityAt >= timeout) {
+    if (timeout && now - displayActivityAt >= timeout) {
+        restingAccelReady = false;
+        pickupSamples = 0;
+        lastMotionSample = now - motionSampleMs;
         M5.Display.sleep();
         displaySleeping = true;
         Serial.println("ORBIT DISPLAY SLEEP");
@@ -1433,6 +1474,7 @@ void setup() {
     center = M5.Display.width() / 2;
     menuButtonReady = configureMenuButton();
     Serial.println(menuButtonReady ? "ORBIT MENU BUTTON READY" : "ORBIT MENU BUTTON UNAVAILABLE");
+    Serial.println(M5.Imu.isEnabled() ? "ORBIT IMU READY" : "ORBIT IMU UNAVAILABLE");
     auto micConfig = M5.Mic.config();
     micConfig.sample_rate = sampleRate;
     M5.Mic.config(micConfig);

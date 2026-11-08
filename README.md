@@ -2,7 +2,7 @@
 
 <img src="assets/orbit-flower.png" alt="Red, the flower avatar" width="128">
 
-**Firmware 0.2.1** · Voice assistant and timer for the round M5Stack StopWatch (C152)
+**Firmware 0.2.2** · Voice assistant and timer for the round M5Stack StopWatch (C152)
 
 Red is a pocket-sized flower you can talk to. Hold the left button to ask a question, read the live transcript on the watch, and hear the reply from its speaker. Once Wi-Fi is set up, the watch connects directly to GPT-Live. You can unplug USB and use Red on battery.
 
@@ -56,7 +56,7 @@ Pairing uses a fresh code and closes after two minutes. You can cancel with the 
 | Hold **B** | Return to the avatar from a finished reply or timer. A running timer continues counting. |
 | Press the bottom red button | Open or close Settings, or go back from the Wi-Fi picker. Hold **A** and **B** together as another way to open Settings. |
 | **A** / **B** in Settings | Move to the next option / select it. Volume cycles through 25%, 50%, 75%, and 100%. |
-| **Display** in Settings | Cycle through 30 seconds (default), 1 minute, 5 minutes, and Never. The watch saves your choice. Touch, buttons, voice activity, and timer alerts wake the display. |
+| **Display** in Settings | Cycle through 30 seconds (default), 1 minute, 5 minutes, and Never. The watch saves your choice. Pick up Red, touch the screen, or press a button to wake it. Voice activity and timer alerts also wake the display. |
 | Tap or swipe | Tap the home screen to make Red bounce. Swipe up or down on a long reply to read more. |
 
 The watch records up to about eight seconds per question and buffers up to about 30 seconds of reply audio. Conversation context clears on restart. **Voice interrupt beta** allows simultaneous mic and speaker audio in hands-free mode. It defaults to off while we improve echo handling and speech capture.
