@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.3.2";
+constexpr char firmwareVersion[] = "FW 0.3.3";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -77,6 +77,7 @@ Mood mood = Mood::idle;
 Screen screen = Screen::home;
 M5Canvas flower(&M5.Display);
 M5Canvas conversation(&M5.Display);
+std::unique_ptr<redCamera::Snapshot> displayedCamera;
 bool flowerReady = false;
 unsigned long avatarBounceAt = 0;
 int avatarLift = 0;
@@ -176,6 +177,7 @@ void wakeDisplay();
 
 void enterScreen(Screen next) {
     if (screen == next) return;
+    if (screen == Screen::camera) displayedCamera.reset();
     screen = next;
     M5.Display.fillScreen(TFT_BLACK);
     drawStatus();
@@ -358,6 +360,7 @@ void show(Mood state, const String& message) {
     replyStreaming = false;
     scrollTouch = false;
     if (mood == Mood::idle) {
+        displayedCamera.reset();
         screen = Screen::home;
         drawHome(message);
     } else {
@@ -451,19 +454,26 @@ void showTimer() {
     drawTimer(redTimer::snapshot());
 }
 
+bool drawCamera(const redCamera::Snapshot& snapshot) {
+    auto& display = M5.Display;
+    const int width = display.width();
+    const int height = display.height();
+    const float scale = max(static_cast<float>(width) / snapshot.width,
+                            static_cast<float>(height) / snapshot.height);
+    display.fillScreen(TFT_BLACK);
+    if (snapshot.data[0] == 0xff) {
+        return display.drawJpg(snapshot.data, snapshot.size, 0, 0, width, height,
+                               0, 0, scale, scale, middle_center);
+    }
+    return display.drawPng(snapshot.data, snapshot.size, 0, 0, width, height,
+                           0, 0, scale, scale, middle_center);
+}
+
 bool showCamera() {
     auto snapshot = orbitLive::takeCameraSnapshot();
     if (!snapshot) return false;
-    auto& panel = conversation;
-    panel.fillScreen(TFT_BLACK);
-    const auto data = snapshot->data;
-    const bool jpeg = data[0] == 0xff;
-    const bool drawn = jpeg
-        ? panel.drawJpg(data, snapshot->size, 0, 2, conversationWidth, footerY - 22,
-                        0, 0, 0, 0, middle_center)
-        : panel.drawPng(data, snapshot->size, 0, 2, conversationWidth, footerY - 22,
-                        0, 0, 0, 0, middle_center);
-    if (!drawn) {
+    enterScreen(Screen::camera);
+    if (!drawCamera(*snapshot)) {
         Serial.println("ORBIT CAMERA DECODE FAILED");
         show(Mood::error, "Could not display the camera image.");
         return true;
@@ -472,19 +482,13 @@ bool showCamera() {
     replyLines.clear();
     replyStreaming = false;
     scrollTouch = false;
-    enterScreen(Screen::camera);
-    panel.setFont(uiFont::label());
-    panel.setTextSize(1);
-    panel.setTextDatum(top_center);
-    panel.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    panel.drawString("Snapshot   /   B: Back", conversationWidth / 2, footerY);
-    panel.pushSprite(center - conversationWidth / 2, conversationTop);
+    displayedCamera = std::move(snapshot);
     Serial.println("ORBIT CAMERA DISPLAYED");
     return true;
 }
 
 void drawStatus() {
-    if (displaySleeping) return;
+    if (displaySleeping || (screen == Screen::camera && !settingsOpen)) return;
     auto& display = M5.Display;
     const int x = center - 61;
     constexpr int y = 52;
@@ -599,10 +603,8 @@ void returnToReplyOrHome() {
         M5.Display.fillScreen(TFT_BLACK);
         drawStatus();
         drawTimer(redTimer::snapshot());
-    } else if (screen == Screen::camera) {
-        M5.Display.fillScreen(TFT_BLACK);
-        drawStatus();
-        conversation.pushSprite(center - conversationWidth / 2, conversationTop);
+    } else if (screen == Screen::camera && displayedCamera) {
+        drawCamera(*displayedCamera);
     } else if (mood == Mood::answer && !replyLines.empty()) {
         screen = Screen::answer;
         M5.Display.fillScreen(TFT_BLACK);
@@ -1237,6 +1239,8 @@ void wakeDisplay() {
         drawSettings();
     } else if (screen == Screen::home) {
         drawHome(homePrompt());
+    } else if (screen == Screen::camera && displayedCamera) {
+        drawCamera(*displayedCamera);
     } else {
         M5.Display.fillScreen(TFT_BLACK);
         drawStatus();

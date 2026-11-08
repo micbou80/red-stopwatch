@@ -83,7 +83,7 @@ python orbit.py --setup-hass
 
 Setup checks the remote MCP tool list and saves the supported tools to Red. Try “Is the living room lamp on?” or “Turn off the living room lamp” with the name used in Home Assistant. Red uses this integration in standalone voice mode from any internet-connected Wi-Fi network.
 
-For a camera, expose it to **Assist** and ask “Show the garden camera.” Red resolves the camera by name or area through the same Device control MCP endpoint. It fetches a still image from Home Assistant over HTTPS and displays it locally. The image stays on the watch. Press **B** to return home.
+For a camera, expose it to **Assist** and ask “Show the garden camera.” Red uses the Device control MCP endpoint to discover the camera by name or area. It fetches a still image over HTTPS and crops it to fill the display without stretching it. The image stays on the watch. Press **B** to return home.
 
 The watch stores the endpoint and token in local flash. GPT-Live passes the token to OpenAI’s Responses backend to authenticate the MCP calls. Remove the saved settings with `python orbit.py --clear-hass` and revoke the token in Home Assistant if you no longer need it. [GPT-Live MCP tool docs](https://developers.openai.com/api/docs/guides/live-delegation#add-mcp-and-other-tools)
 

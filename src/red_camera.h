@@ -12,6 +12,8 @@ struct Snapshot {
 
     uint8_t* data = nullptr;
     size_t size = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
 };
 
 const char* fetch(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,

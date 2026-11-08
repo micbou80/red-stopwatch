@@ -65,6 +65,38 @@ bool isCameraId(const char* entity) {
     return true;
 }
 
+uint16_t readU16(const uint8_t* data) {
+    return (static_cast<uint16_t>(data[0]) << 8) | data[1];
+}
+
+bool readDimensions(Snapshot& snapshot) {
+    const uint8_t* data = snapshot.data;
+    if (snapshot.size >= 24 && !memcmp(data, "\x89PNG\r\n\x1a\n", 8)) {
+        if (memcmp(data + 12, "IHDR", 4) || readU16(data + 16) || readU16(data + 20)) return false;
+        snapshot.width = readU16(data + 18);
+        snapshot.height = readU16(data + 22);
+        return snapshot.width && snapshot.height;
+    }
+    if (snapshot.size < 4 || readU16(data) != 0xffd8) return false;
+    for (size_t offset = 2; offset + 4 <= snapshot.size;) {
+        if (data[offset++] != 0xff) return false;
+        while (offset < snapshot.size && data[offset] == 0xff) ++offset;
+        if (offset + 3 > snapshot.size) return false;
+        const uint8_t marker = data[offset++];
+        if (marker == 0xda || marker == 0xd9) return false;
+        const size_t length = readU16(data + offset);
+        if (length < 2 || length > snapshot.size - offset) return false;
+        if (marker == 0xc0 || marker == 0xc1 || marker == 0xc2) {
+            if (length < 7) return false;
+            snapshot.height = readU16(data + offset + 3);
+            snapshot.width = readU16(data + offset + 5);
+            return snapshot.width && snapshot.height;
+        }
+        offset += length;
+    }
+    return false;
+}
+
 const char* resolve(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,
                     const char* name, const char* area, const String& origin, String& entity) {
     StaticJsonDocument<512> call;
@@ -159,7 +191,7 @@ const char* fetch(const char* endpoint, const char* token, const char* lookupToo
 
     url += "/api/camera_proxy/";
     url += entity;
-    url += "?width=480&height=360";
+    url += "?width=800&height=800";
     constexpr size_t capacity = 384 * 1024;
     snapshot.data = static_cast<uint8_t*>(ps_malloc(capacity));
     if (!snapshot.data) return "out_of_memory";
@@ -169,11 +201,8 @@ const char* fetch(const char* endpoint, const char* token, const char* lookupToo
     if (status == 401 || status == 403) return "home_assistant_access_denied";
     if (status == 413) return "snapshot_too_large";
     if (status != 200 || !body.size) return "snapshot_unavailable";
-    const uint8_t* data = snapshot.data;
-    const bool jpeg = body.size >= 4 && data[0] == 0xff && data[1] == 0xd8;
-    const bool png = body.size >= 8 && !memcmp(data, "\x89PNG\r\n\x1a\n", 8);
-    if (!jpeg && !png) return "unsupported_snapshot_format";
     snapshot.size = body.size;
+    if (!readDimensions(snapshot)) return "unsupported_snapshot_format";
     return "ok";
 }
 }
