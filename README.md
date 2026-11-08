@@ -134,3 +134,4 @@ python "$env:USERPROFILE\.platformio\packages\tool-esptoolpy\esptool.py" --chip 
 - Make hands-free transcription and interruption more reliable.
 - Revisit battery indicator placement.
 - Explore named timers, read-only calendar lookups with reminders, and a shared task list.
+- Revisit app-free Wi-Fi setup from an iPhone when Red needs to join a new network.
