@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.3.6";
+constexpr char firmwareVersion[] = "FW 0.3.7";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -1218,13 +1218,15 @@ void startRecording(bool handsFree = false) {
 }
 
 void updateStandby(unsigned long now) {
-    if (!hotMic || bridgeReady || !orbitLive::ready() || checkingCloud || recording ||
+    if (bridgeReady || !orbitLive::ready() || checkingCloud || recording ||
         chord != Chord::idle || M5.BtnA.isPressed() || M5.BtnB.isPressed() ||
         static_cast<long>(now - autoRearmAt) < 0) return;
+    if (!hotMic && displaySleeping) return;
     if (!micRunning()) {
         if (directTurn || playing || static_cast<long>(now - nextMicWarmupAt) < 0) return;
-        if (!voiceInterruptBeta) {
+        if (!hotMic || !voiceInterruptBeta) {
             if (!startMic()) nextMicWarmupAt = now + 2000;
+            else if (!hotMic) Serial.println("ORBIT MIC PREWARM");
         } else if (!duplexAudio::begin(releaseMicBuffer)) {
             nextMicWarmupAt = now + 2000;
             voiceInterruptBeta = false;
@@ -1235,6 +1237,8 @@ void updateStandby(unsigned long now) {
         }
         return;
     }
+    // Manual standby only initializes the codec. Queue samples once A is held.
+    if (!hotMic) return;
     if ((directTurn || playing) && !duplexAudio::active()) return;
     if (static_cast<long>(now - micReadyAt) < 0) return;
     while (standbyRead < standbyCompleted.load()) {
@@ -1273,6 +1277,7 @@ void toggleHotMic() {
         if (recording && autoRecording) cancelTurn();
         if (!recording) stopMic();
     } else {
+        if (voiceInterruptBeta && !recording) stopMic();
         noiseLevel = 80;
         autoRearmAt = millis() + 200;
     }
@@ -1374,6 +1379,7 @@ void updateDisplayTimeout(bool menuClicked) {
         lastMotionSample = now - motionSampleMs;
         M5.Display.sleep();
         displaySleeping = true;
+        if (!hotMic && micRunning()) stopMic();
         if (screen == Screen::camera) redCamera::stop();
         Serial.println("ORBIT DISPLAY SLEEP");
     }
