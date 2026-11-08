@@ -65,16 +65,17 @@ bool isCameraId(const char* entity) {
     return true;
 }
 
-const char* resolve(const char* endpoint, const char* token, const char* stateTool,
-                    const char* name, const char* area, String& entity) {
+const char* resolve(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,
+                    const char* name, const char* area, const String& origin, String& entity) {
     StaticJsonDocument<512> call;
     call["jsonrpc"] = "2.0";
     call["id"] = 1;
     call["method"] = "tools/call";
     auto params = call.createNestedObject("params");
-    params["name"] = stateTool;
+    params["name"] = lookupTool;
     auto args = params.createNestedObject("arguments");
-    args.createNestedArray("domain").add("camera");
+    if (returnsIds) args.createNestedArray("domain").add("camera");
+    else args["domain"] = "camera";
     if (*name) args["name"] = name;
     if (*area) args["area"] = area;
     String payload;
@@ -100,20 +101,41 @@ const char* resolve(const char* endpoint, const char* token, const char* stateTo
     if (result.isNull()) return "camera_lookup_failed";
     if (result["isError"] | false) return "no_exposed_camera_match";
     JsonObjectConst details = result["structuredContent"];
-    if (details.isNull()) {
+    size_t detailsLength = 0;
+    if (!returnsIds) {
+        // GetLiveContext checks Assist exposure and provides names, but omits entity IDs.
+        // The read-only Assist intent resolves the same target to an ID for the image endpoint.
+        call.clear();
+        call["name"] = "HassGetState";
+        call["assistant"] = "conversation";
+        auto slots = call.createNestedObject("data");
+        slots.createNestedArray("domain").add("camera");
+        if (*name) slots["name"] = name;
+        if (*area) slots["area"] = area;
+        payload = "";
+        serializeJson(call, payload);
+        body.size = 0;
+        const String intentUrl = origin + "/api/intent/handle";
+        const int intentStatus = request(intentUrl.c_str(), token, body, &payload);
+        Serial.printf("ORBIT CAMERA INTENT HTTP %d\n", intentStatus);
+        if (intentStatus != 200 || !body.size) return "camera_lookup_failed";
+        detailsLength = body.size;
+    } else if (details.isNull()) {
         // The MCP server wraps Home Assistant's JSON intent result in a text item.
         const auto content = result["content"][0];
         if (strcmp(content["type"] | "", "text")) return "camera_lookup_failed";
         const char* response = content["text"] | "";
-        const size_t length = strlen(response);
-        memmove(buffer.get(), response, length + 1);
+        detailsLength = strlen(response);
+        memmove(buffer.get(), response, detailsLength + 1);
+    }
+    if (detailsLength) {
         envelope.clear();
         StaticJsonDocument<192> filter;
         filter["data"]["success"][0]["id"] = true;
-        if (deserializeJson(envelope, reinterpret_cast<char*>(buffer.get()), length,
-                            DeserializationOption::Filter(filter))) {
-            return "camera_lookup_failed";
-        }
+        const auto parsed = deserializeJson(envelope, reinterpret_cast<char*>(buffer.get()), detailsLength,
+                                            DeserializationOption::Filter(filter));
+        if (parsed == DeserializationError::NoMemory) return "multiple_camera_matches";
+        if (parsed) return "camera_lookup_failed";
         details = envelope.as<JsonObjectConst>();
     }
     for (auto match : details["data"]["success"].as<JsonArrayConst>()) {
@@ -126,15 +148,15 @@ const char* resolve(const char* endpoint, const char* token, const char* stateTo
 }
 }
 
-const char* fetch(const char* endpoint, const char* token, const char* stateTool,
+const char* fetch(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,
                   const char* name, const char* area, Snapshot& snapshot) {
     if (!*name && !*area) return "camera_name_or_area_required";
-    String entity;
-    const char* lookup = resolve(endpoint, token, stateTool, name, area, entity);
-    if (strcmp(lookup, "ok")) return lookup;
-
     String url(endpoint);
     url.remove(url.length() - strlen("/api/mcp/assist"));
+    String entity;
+    const char* lookup = resolve(endpoint, token, lookupTool, returnsIds, name, area, url, entity);
+    if (strcmp(lookup, "ok")) return lookup;
+
     url += "/api/camera_proxy/";
     url += entity;
     url += "?width=480&height=360";

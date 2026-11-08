@@ -14,6 +14,6 @@ struct Snapshot {
     size_t size = 0;
 };
 
-const char* fetch(const char* endpoint, const char* token, const char* stateTool,
+const char* fetch(const char* endpoint, const char* token, const char* lookupTool, bool returnsIds,
                   const char* name, const char* area, Snapshot& snapshot);
 }
