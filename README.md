@@ -2,7 +2,7 @@
 
 <img src="assets/orbit-flower.png" alt="Red, the flower avatar" width="128">
 
-**Firmware 0.2.2** · Voice assistant and timer for the round M5Stack StopWatch (C152)
+**Firmware 0.3.0** · Voice assistant and timer for the round M5Stack StopWatch (C152)
 
 Red is a pocket-sized flower you can talk to. Hold the left button to ask a question, read the live transcript on the watch, and hear the reply from its speaker. Once Wi-Fi is set up, the watch connects directly to GPT-Live. You can unplug USB and use Red on battery.
 
@@ -12,6 +12,7 @@ Red is a pocket-sized flower you can talk to. Hold the left button to ask a ques
 | --- | --- |
 | Voice chat | Streams your transcript and shows the answer as text and audio arrive. Red carries up to four recent question-and-answer pairs across standalone turns. |
 | Live information | Delegates questions about current facts to web search. Try “What’s tomorrow’s weather in Berlin?” |
+| Home Assistant | Can query exposed device states and control exposed lights, fans, and switches by voice through a remote MCP endpoint. |
 | Voice timer | Starts, checks, extends, and cancels a local countdown. The full-size timer view shows `HH:MM:SS`, with a vibration and chime at zero. |
 | Hands-free mode | Double-click **A** to turn on automatic listening. By default, listening resumes after the spoken reply ends. |
 | Round-screen UI | The flower bounces when you tap the home screen. Swipe to scroll long answers. White status icons show battery percentage, charging, and Wi-Fi strength. |
@@ -70,6 +71,20 @@ Red supports one timer from one second to 24 hours. A second start request leave
 ## How it works
 
 In standalone mode, the ESP32-S3 streams microphone audio directly to GPT-Live 1 over Wi-Fi. GPT-Live sends back transcription, reply text, and speech. GPT-6 Luna handles delegated web searches and can call the watch’s timer tool. The firmware applies timer commands locally and returns the actual result before Red confirms an action.
+
+## Home Assistant from anywhere
+
+1. Enable the **Model Context Protocol** integration in Home Assistant. Use the **Device control** MCP endpoint, which ends in `/api/mcp/assist`. Expose only the lights, fans, switches, and sensors you want Red to use. Home Assistant Cloud provides the public HTTPS address. [Home Assistant MCP setup](https://www.home-assistant.io/integrations/mcp_server/)
+2. Create a dedicated Home Assistant long-lived access token from the account’s **Profile → Security** page. A non-admin account can use the Device control endpoint. [Home Assistant access tokens](https://www.home-assistant.io/docs/authentication/)
+3. Connect Red by USB and close any running bridge. Run the setup command and enter the Home Assistant Cloud URL and access token at the hidden prompts.
+
+```powershell
+python orbit.py --setup-hass
+```
+
+Setup checks the remote MCP tool list and saves the supported tools to Red. Try “Is the living room lamp on?” or “Turn off the living room lamp” with the name used in Home Assistant. Red uses this integration in standalone voice mode from any internet-connected Wi-Fi network.
+
+The watch stores the endpoint and token in local flash. GPT-Live passes the token to OpenAI’s Responses backend to authenticate the MCP calls. Remove the saved settings with `python orbit.py --clear-hass` and revoke the token in Home Assistant if you no longer need it. [GPT-Live MCP tool docs](https://developers.openai.com/api/docs/guides/live-delegation#add-mcp-and-other-tools)
 
 | Path | What lives there |
 | --- | --- |

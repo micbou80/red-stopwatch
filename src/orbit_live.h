@@ -4,6 +4,8 @@
 
 namespace orbitLive {
 void begin();
+void loadHomeAssistant();
+bool configureHomeAssistant(const String& settings);
 bool provision(const String& settings);
 bool saveWifi(const char* ssid, const char* password);
 bool configured();

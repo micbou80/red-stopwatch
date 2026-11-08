@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.2.2";
+constexpr char firmwareVersion[] = "FW 0.3.0";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -1385,6 +1385,13 @@ void handleCommand(const String& command) {
     if (command == "WIFI STATUS") {
         Serial.print("ORBIT WIFI ");
         Serial.println(networkStatus());
+    } else if (command.startsWith("HASS SET ") || command == "HASS OFF") {
+        if (bridgeReady || checkingCloud || orbitLive::closing() || directTurn || recording || playing) {
+            Serial.println("ORBIT HASS BUSY");
+        } else {
+            const String settings = command == "HASS OFF" ? String() : command.substring(9);
+            Serial.println(orbitLive::configureHomeAssistant(settings) ? "ORBIT HASS SAVED" : "ORBIT HASS ERROR");
+        }
     } else if (command == "WIFI CHECK") {
         if (checkingCloud || directTurn || recording || playing || !orbitLive::ready() ||
             !orbitLive::start(nullptr, 0)) {
@@ -1491,6 +1498,7 @@ void setup() {
         if (savedTimeout < displayTimeoutCount) displayTimeoutIndex = savedTimeout;
         preferences.end();
     }
+    orbitLive::loadHomeAssistant();
     orbitLive::begin();
     conversation.setColorDepth(16);
     conversation.setPsram(true);

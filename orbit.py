@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+from http.client import HTTPException, HTTPSConnection
 import json
 import os
 import queue
@@ -10,6 +11,7 @@ import time
 import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit, urlunsplit
 
 import serial
 import websocket
@@ -180,6 +182,94 @@ def setup_watch(port):
         print("Settings saved. The watch has not joined Wi-Fi. Check the network and password.")
 
 
+HASS_PATH = "/api/mcp/assist"
+HASS_TOOLS = {"GetLiveContext", "HassGetState", "HassTurnOn", "HassTurnOff", "HassLightSet"}
+
+
+def hass_endpoint(value):
+    parts = urlsplit(value)
+    if (parts.scheme != "https" or not parts.hostname or parts.username is not None
+            or parts.password is not None or parts.query or parts.fragment
+            or parts.path.rstrip("/") not in ("", HASS_PATH)):
+        raise RuntimeError("Enter the public HTTPS Home Assistant Cloud URL or its Device control MCP URL.")
+    return urlunsplit(parts._replace(path=HASS_PATH))
+
+
+def hass_tools(endpoint, token):
+    parts = urlsplit(endpoint)
+    connection = HTTPSConnection(parts.hostname, parts.port or 443, timeout=12)
+    try:
+        connection.request(
+            "POST", parts.path,
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+        response = connection.getresponse()
+        if response.status in (401, 403):
+            raise RuntimeError("Home Assistant rejected the token or its Device control permissions.")
+        if response.status == 404:
+            raise RuntimeError("Home Assistant did not find the Device control MCP endpoint. Enable MCP in Settings.")
+        if response.status != 200:
+            raise RuntimeError(f"Home Assistant MCP returned HTTP {response.status}.")
+        content_type = response.getheader("Content-Type", "")
+        payload = response.read(256001)
+        if len(payload) > 256000:
+            raise RuntimeError("Home Assistant returned an unexpectedly large tool list.")
+        if content_type.startswith("text/event-stream"):
+            messages = [
+                json.loads(line[5:].strip())
+                for line in payload.decode().splitlines() if line.startswith("data:")
+            ]
+            result = next((item for item in messages if item.get("id") == 1), {})
+        else:
+            result = json.loads(payload)
+        names = {}
+        for tool in result.get("result", {}).get("tools", []):
+            name = tool.get("name", "")
+            base = name.removeprefix("assist__")
+            base = base.removeprefix("homeassistant__").removeprefix("intent__")
+            if base in HASS_TOOLS:
+                names[base] = name
+        if not names:
+            raise RuntimeError("Home Assistant MCP did not list any supported Device control tools.")
+        return sorted(names.values())
+    except (OSError, HTTPException, ValueError) as error:
+        raise RuntimeError("Could not read the Home Assistant MCP tool list over HTTPS.") from error
+    finally:
+        connection.close()
+
+
+def setup_hass(port, clear=False):
+    command = b"HASS OFF\n"
+    if not clear:
+        endpoint = hass_endpoint(getpass.getpass("Home Assistant Cloud HTTPS URL: ").strip())
+        token = getpass.getpass("Home Assistant long-lived access token: ").strip()
+        if not token or len(token) > 512 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for ch in token):
+            raise RuntimeError("Enter a valid Home Assistant long-lived access token.")
+        names = hass_tools(endpoint, token)
+        command = ("HASS SET " + json.dumps({"url": endpoint, "token": token, "tools": names}, separators=(",", ":")) + "\n").encode()
+        if len(command) - 1 > 768:
+            raise RuntimeError("The Home Assistant settings are too long for the watch.")
+        print(f"Home Assistant MCP listed {len(names)} supported tools. Saving to Red...", flush=True)
+    with serial.Serial(port, 115200, timeout=0.2, write_timeout=2) as watch:
+        watch.write(command)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            reply = watch.readline().strip()
+            if reply == b"ORBIT HASS SAVED":
+                print("Home Assistant disconnected from Red." if clear else "Home Assistant saved. Try asking Red about an exposed light.")
+                return
+            if reply == b"ORBIT HASS BUSY":
+                raise RuntimeError("Red is busy. Close the USB bridge or wait for the current turn to finish.")
+            if reply == b"ORBIT HASS ERROR":
+                raise RuntimeError("Red rejected the Home Assistant settings.")
+    raise RuntimeError("Red did not acknowledge Home Assistant setup. Check the firmware version and close any setup menu.")
+
+
 def run(watch, key, demo, smoke_test):
     connect(watch, demo)
     if smoke_test:
@@ -258,14 +348,18 @@ def main():
     parser.add_argument("--port", help="StopWatch serial port, e.g. COM7")
     parser.add_argument("--demo", action="store_true", help="Use local mic loopback and canned text")
     parser.add_argument("--ask-key", action="store_true", help="Prompt for a live API key without echoing it")
-    parser.add_argument("--setup-watch", action="store_true", help="Set up standalone Wi-Fi mode over USB")
+    setup = parser.add_mutually_exclusive_group()
+    setup.add_argument("--setup-watch", action="store_true", help="Set up standalone Wi-Fi mode over USB")
+    setup.add_argument("--setup-hass", action="store_true", help="Set up remote Home Assistant MCP over USB")
+    setup.add_argument("--clear-hass", action="store_true", help="Remove Home Assistant credentials from Red")
     parser.add_argument("--smoke-test", action="store_true", help="Test the watch display and speaker transport")
     args = parser.parse_args()
     demo = args.demo or args.smoke_test
     key = os.getenv("OPENAI_API_KEY", "").strip()
-    if args.ask_key and not (key or demo):
+    provisioning = args.setup_watch or args.setup_hass or args.clear_hass
+    if args.ask_key and not (key or demo or provisioning):
         key = getpass.getpass("OpenAI API key: ").strip()
-    if not (key or demo or args.setup_watch):
+    if not (key or demo or provisioning):
         parser.error("Set OPENAI_API_KEY, use --ask-key for live answers, or use --demo.")
     port = args.port
     if not port:
@@ -276,6 +370,9 @@ def main():
     try:
         if args.setup_watch:
             setup_watch(port)
+            return
+        if args.setup_hass or args.clear_hass:
+            setup_hass(port, clear=args.clear_hass)
             return
         with serial.Serial(port, 115200, timeout=0.1, write_timeout=2) as watch:
             try:
