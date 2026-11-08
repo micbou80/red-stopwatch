@@ -12,7 +12,7 @@ Red is a pocket-sized flower you can talk to. Hold the left button to ask a ques
 | --- | --- |
 | Voice chat | Streams your transcript and shows the answer as text and audio arrive. Red carries up to four recent question-and-answer pairs across standalone turns. |
 | Live information | Delegates questions about current facts to web search. Try “What’s tomorrow’s weather in Berlin?” |
-| Home Assistant | Can query exposed device states and control exposed lights, fans, and switches by voice through a remote MCP endpoint. |
+| Home Assistant | Query exposed device states, control lights, fans, and switches, and show a snapshot from an exposed camera by voice. |
 | Voice timer | Starts, checks, extends, and cancels a local countdown. The full-size timer view shows `HH:MM:SS`, with a vibration and chime at zero. |
 | Hands-free mode | Double-click **A** to turn on automatic listening. By default, listening resumes after the spoken reply ends. |
 | Round-screen UI | The flower bounces when you tap the home screen. Swipe to scroll long answers. White status icons show battery percentage, charging, and Wi-Fi strength. |
@@ -83,6 +83,8 @@ python orbit.py --setup-hass
 ```
 
 Setup checks the remote MCP tool list and saves the supported tools to Red. Try “Is the living room lamp on?” or “Turn off the living room lamp” with the name used in Home Assistant. Red uses this integration in standalone voice mode from any internet-connected Wi-Fi network.
+
+For a camera, expose it to **Assist** and ask “Show the garden camera.” Red resolves the camera by name or area through the same Device control MCP endpoint. It fetches a still image from Home Assistant over HTTPS and displays it locally. The image stays on the watch. Hold B to return home.
 
 The watch stores the endpoint and token in local flash. GPT-Live passes the token to OpenAI’s Responses backend to authenticate the MCP calls. Remove the saved settings with `python orbit.py --clear-hass` and revoke the token in Home Assistant if you no longer need it. [GPT-Live MCP tool docs](https://developers.openai.com/api/docs/guides/live-delegation#add-mcp-and-other-tools)
 

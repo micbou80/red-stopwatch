@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "red_camera.h"
 
 namespace orbitLive {
 void begin();
@@ -29,6 +30,7 @@ void closeAsync();
 bool closing();
 bool waitingForBackend();
 bool timerViewRequested();
+std::unique_ptr<redCamera::Snapshot> takeCameraSnapshot();
 String caption();
 String inputCaption();
 void rememberTurn(String answer);

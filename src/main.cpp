@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.3.0";
+constexpr char firmwareVersion[] = "FW 0.3.1";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -56,7 +56,7 @@ constexpr int visibleLines = (footerY - textTop) / lineHeight;
 constexpr int dragLineHeight = 24;
 
 enum class Mood { idle, listening, thinking, answer, error };
-enum class Screen { home, transcript, answer, timer };
+enum class Screen { home, transcript, answer, timer, camera };
 enum SettingsOption {
     settingsWifi, settingsBluetooth, settingsVolume, settingsDisplay, settingsHandsFree,
     settingsInterrupt, settingsBack, settingsCount
@@ -448,6 +448,38 @@ void showTimer() {
     drawTimer(redTimer::snapshot());
 }
 
+bool showCamera() {
+    auto snapshot = orbitLive::takeCameraSnapshot();
+    if (!snapshot) return false;
+    auto& panel = conversation;
+    panel.fillScreen(TFT_BLACK);
+    const auto data = snapshot->data;
+    const bool jpeg = data[0] == 0xff;
+    const bool drawn = jpeg
+        ? panel.drawJpg(data, snapshot->size, 0, 2, conversationWidth, footerY - 22,
+                        0, 0, 0, 0, middle_center)
+        : panel.drawPng(data, snapshot->size, 0, 2, conversationWidth, footerY - 22,
+                        0, 0, 0, 0, middle_center);
+    if (!drawn) {
+        Serial.println("ORBIT CAMERA DECODE FAILED");
+        show(Mood::error, "Could not display the camera image.");
+        return true;
+    }
+    mood = Mood::idle;
+    replyLines.clear();
+    replyStreaming = false;
+    scrollTouch = false;
+    enterScreen(Screen::camera);
+    panel.setFont(uiFont::label());
+    panel.setTextSize(1);
+    panel.setTextDatum(top_center);
+    panel.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    panel.drawString("Snapshot   /   Hold B for home", conversationWidth / 2, footerY);
+    panel.pushSprite(center - conversationWidth / 2, conversationTop);
+    Serial.println("ORBIT CAMERA DISPLAYED");
+    return true;
+}
+
 void drawStatus() {
     if (displaySleeping) return;
     auto& display = M5.Display;
@@ -564,6 +596,10 @@ void returnToReplyOrHome() {
         M5.Display.fillScreen(TFT_BLACK);
         drawStatus();
         drawTimer(redTimer::snapshot());
+    } else if (screen == Screen::camera) {
+        M5.Display.fillScreen(TFT_BLACK);
+        drawStatus();
+        conversation.pushSprite(center - conversationWidth / 2, conversationTop);
     } else if (mood == Mood::answer && !replyLines.empty()) {
         screen = Screen::answer;
         M5.Display.fillScreen(TFT_BLACK);
@@ -785,6 +821,7 @@ void finishDirect(const char* error = nullptr, bool remember = true) {
         playing = false;
         directTurn = false;
         playable = 0;
+        if (hasSession && showCamera()) return;
         if (hasSession && orbitLive::timerViewRequested()) showTimer();
         else show(Mood::error, error);
         return;
@@ -795,7 +832,9 @@ void finishDirect(const char* error = nullptr, bool remember = true) {
         orbitLive::rememberTurn(caption);
     }
     if (hasSession) orbitLive::closeAsync();
-    showReply(caption.isEmpty() ? "Red has an answer" : caption, false, true);
+    if (!(hasSession && showCamera())) {
+        showReply(caption.isEmpty() ? "Red has an answer" : caption, false, true);
+    }
 }
 
 bool retryDirect() {
