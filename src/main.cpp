@@ -16,7 +16,7 @@ extern const uint8_t flowerStart[] asm("_binary_assets_orbit_flower_png_start");
 extern const uint8_t flowerEnd[] asm("_binary_assets_orbit_flower_png_end");
 
 namespace {
-constexpr char firmwareVersion[] = "FW 0.3.5";
+constexpr char firmwareVersion[] = "FW 0.3.6";
 constexpr int avatarTop = 86;
 constexpr int avatarSize = 252;
 constexpr int avatarBounceHeight = 8;
@@ -35,7 +35,7 @@ constexpr size_t legacyMicBlock = 2 * micChunk;
 constexpr size_t usbChunk = 1024;
 constexpr size_t speakerChunk = sampleRate / 5;
 constexpr size_t speakerPreroll = sampleRate * 80 / 1000;
-constexpr unsigned long holdToTalkMs = 180;
+constexpr unsigned long holdToTalkMs = 110;
 constexpr unsigned long doubleClickMs = 380;
 constexpr unsigned long settingsHoldMs = 750;
 constexpr int backButtonPin = 1;  // StopWatch KEYB, active low.
